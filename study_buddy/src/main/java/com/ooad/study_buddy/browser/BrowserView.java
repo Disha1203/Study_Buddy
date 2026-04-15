@@ -5,16 +5,11 @@ import javafx.geometry.Insets;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.StackPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Button;
 import javafx.scene.web.WebView;
 import javafx.scene.web.WebEngine;
 
-/**
- * SRP: Only responsible for the browser UI.
- * Low Coupling: Accepts a TimerOverlay to display — does not know timer logic.
- */
 public class BrowserView {
 
     private WebView webView;
@@ -30,21 +25,9 @@ public class BrowserView {
         urlField = new TextField();
         urlField.setPromptText("Search or enter URL");
         urlField.setPrefHeight(35);
-        urlField.setStyle(
-                "-fx-background-radius: 8;" +
-                        "-fx-border-radius: 8;" +
-                        "-fx-padding: 8;" +
-                        "-fx-background-color: #2c2c3c;" +
-                        "-fx-text-fill: white;" +
-                        "-fx-prompt-text-fill: #aaaaaa;");
 
         goButton = new Button("Go");
         goButton.setPrefHeight(35);
-        goButton.setStyle(
-                "-fx-background-color: #6C63FF;" +
-                        "-fx-text-fill: white;" +
-                        "-fx-background-radius: 8;" +
-                        "-fx-padding: 8 15;");
 
         setupActions();
     }
@@ -52,11 +35,6 @@ public class BrowserView {
     private void setupActions() {
         goButton.setOnAction(e -> loadPage());
         urlField.setOnAction(e -> loadPage());
-
-        // URL tracking (REQUIRED FEATURE)
-        webEngine.locationProperty().addListener((obs, oldVal, newVal) -> {
-            System.out.println("Navigated to: " + newVal);
-        });
     }
 
     private void loadPage() {
@@ -67,32 +45,20 @@ public class BrowserView {
         webEngine.load(url);
     }
 
-    /**
-     * Returns the browser layout with an optional floating timer overlay
-     * pinned to the bottom-right corner using AnchorPane.
-     */
     public BorderPane getView(TimerOverlay overlay) {
 
         HBox topBar = new HBox(10, urlField, goButton);
         topBar.setPadding(new Insets(10));
-        topBar.setStyle("-fx-background-color: #1e1e2f;");
 
         BorderPane layout = new BorderPane();
         layout.setTop(topBar);
 
         if (overlay != null) {
-            // AnchorPane lets us pin the overlay to exact corner coordinates
-            // WebView fills the entire pane; overlay sits on top, fixed size
             AnchorPane contentPane = new AnchorPane();
 
             webView.prefWidthProperty().bind(contentPane.widthProperty());
             webView.prefHeightProperty().bind(contentPane.heightProperty());
 
-            overlay.setMaxWidth(160);
-            overlay.setMaxHeight(Double.MAX_VALUE);
-            overlay.setPrefWidth(160);
-
-            // Pin overlay to bottom-right with 16px margin
             AnchorPane.setBottomAnchor(overlay, 16.0);
             AnchorPane.setRightAnchor(overlay, 16.0);
 
@@ -105,8 +71,43 @@ public class BrowserView {
         return layout;
     }
 
-    /** Backward-compatible plain browser without overlay. */
     public BorderPane getView() {
         return getView(null);
+    }
+
+    // ✅ SUMMARY VIEW WITH PIE CHART
+    public BorderPane getSummaryView(Runnable goHomeCallback) {
+
+        BorderPane layout = new BorderPane();
+
+        javafx.scene.layout.VBox box = new javafx.scene.layout.VBox(15);
+        box.setStyle("-fx-alignment: center; -fx-padding: 40;");
+
+        javafx.scene.control.Label title = new javafx.scene.control.Label("Session Summary");
+        title.setStyle("-fx-font-size: 24px; -fx-font-weight: bold;");
+
+        int studyTime = 50;
+        int timeLost = 10;
+        int distractions = 4;
+        int focusScore = 83;
+
+        javafx.scene.control.Label study = new javafx.scene.control.Label("Study Time: " + studyTime + " mins");
+        javafx.scene.control.Label distractionsLbl = new javafx.scene.control.Label("Distractions: " + distractions);
+        javafx.scene.control.Label lost = new javafx.scene.control.Label("Time Lost: " + timeLost + " mins");
+        javafx.scene.control.Label score = new javafx.scene.control.Label("Focus Score: " + focusScore + "%");
+
+        // 🎯 PIE CHART
+        javafx.scene.chart.PieChart pieChart = new javafx.scene.chart.PieChart();
+        pieChart.getData().add(new javafx.scene.chart.PieChart.Data("Study", studyTime));
+        pieChart.getData().add(new javafx.scene.chart.PieChart.Data("Lost", timeLost));
+        pieChart.setTitle("Time Distribution");
+
+        javafx.scene.control.Button backBtn = new javafx.scene.control.Button("Back to Home");
+        backBtn.setOnAction(e -> goHomeCallback.run());
+
+        box.getChildren().addAll(title, pieChart, study, distractionsLbl, lost, score, backBtn);
+        layout.setCenter(box);
+
+        return layout;
     }
 }

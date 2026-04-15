@@ -9,9 +9,6 @@ import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 
-/**
- * GRASP - Controller: Owns the Stage and orchestrates scene transitions.
- */
 public class BrowserLauncher extends Application {
 
     private Stage primaryStage;
@@ -25,10 +22,7 @@ public class BrowserLauncher extends Application {
         primaryStage.show();
     }
 
-    // ── Homepage ──────────────────────────────────────────────────────────────
-
     private void showHomepage() {
-        // Stop any running timer when returning to homepage
         sessionController.stopSession();
 
         HomepageView homepage = new HomepageView(sessionController, this::launchSession);
@@ -38,27 +32,33 @@ public class BrowserLauncher extends Application {
         primaryStage.setTitle("Study Buddy");
     }
 
-    // ── Session start → switch to browser ────────────────────────────────────
+   private void launchSession(FocusSession session) {
 
-    private void launchSession(FocusSession session) {
+    TimerOverlay overlay = new TimerOverlay(
+            session.getTopic(),
+            session.getTotalDurationMinutes()
+    );
 
-        // Build overlay with total session duration so it can count down
-        TimerOverlay overlay = new TimerOverlay(
-                session.getTopic(),
-                session.getTotalDurationMinutes());
+    // ✅ ONLY ONE INSTANCE
+    BrowserView browser = new BrowserView();
 
-        // When session ends, return to homepage on JavaFX thread
-        overlay.setOnSessionEndCallback(() -> Platform.runLater(this::showHomepage));
+    overlay.setOnSessionEndCallback(() -> Platform.runLater(() -> {
 
-        // Start timer — registers overlay as observer
-        sessionController.startSession(session, overlay);
+        Scene summaryScene = new Scene(
+                browser.getSummaryView(this::showHomepage),
+                1000, 600
+        );
 
-        // Build browser with overlay
-        BrowserView browser = new BrowserView();
-        Scene scene = new Scene(browser.getView(overlay), 1000, 600);
-        primaryStage.setScene(scene);
-        primaryStage.setTitle("Study Buddy — " + session.getTopic());
-    }
+        primaryStage.setScene(summaryScene);
+        primaryStage.setTitle("Session Summary");
+    }));
+
+    sessionController.startSession(session, overlay);
+
+    Scene scene = new Scene(browser.getView(overlay), 1000, 600);
+    primaryStage.setScene(scene);
+    primaryStage.setTitle("Study Buddy — " + session.getTopic());
+}
 
     public static void main(String[] args) {
         launch();

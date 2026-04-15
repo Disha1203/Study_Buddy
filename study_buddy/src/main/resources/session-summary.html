@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Session Summary</title>
+
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            text-align: center;
+            background: linear-gradient(to right, #1e1e2f, #2a2a40);
+            margin: 0;
+            padding: 40px;
+            color: white;
+        }
+
+        .card {
+            background: #ffffff;
+            color: #333;
+            padding: 25px;
+            border-radius: 12px;
+            width: 350px;
+            margin: auto;
+            box-shadow: 0px 5px 20px rgba(0,0,0,0.3);
+        }
+
+        h2 {
+            margin-bottom: 20px;
+        }
+
+        .metric {
+            margin: 12px 0;
+            font-size: 16px;
+        }
+
+        .label {
+            font-weight: bold;
+        }
+
+        button {
+            margin-top: 20px;
+            padding: 12px 20px;
+            background-color: #6C63FF;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background-color: #574fd6;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="card">
+    <h2>Session Summary</h2>
+
+    <div class="metric"><span class="label">Study Time:</span> 50 mins</div>
+    <div class="metric"><span class="label">Distractions:</span> 4</div>
+    <div class="metric"><span class="label">Time Lost:</span> 10 mins</div>
+    <div class="metric"><span class="label">Focus Score:</span> 83%</div>
+
+    <!-- ✅ UPDATED BUTTON -->
+    <button id="backBtn">Back to Home</button>
+</div>
+
+<!-- ✅ UPDATED SCRIPT -->
+<script>
+document.getElementById("backBtn").addEventListener("click", function () {
+    if (window.app && window.app.goHome) {
+        console.log("Calling Java bridge...");
+        window.app.goHome();
+    } else {
+        alert("Bridge not ready");
+    }
+});
+</script>
+
+</body>
+</html>
