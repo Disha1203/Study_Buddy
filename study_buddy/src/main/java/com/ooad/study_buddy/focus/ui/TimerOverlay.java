@@ -1,5 +1,7 @@
 package com.ooad.study_buddy.focus.ui;
 
+import com.ooad.study_buddy.controller.BrowserController;
+import com.ooad.study_buddy.focus.FocusStateHolder;
 import com.ooad.study_buddy.focus.observer.TimerObserver;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -15,24 +17,28 @@ public class TimerOverlay extends VBox implements TimerObserver {
     private final Label modeLabel;
     private final Label timerLabel;
     private final Label topicLabel;
-    private final Label sessionLabel; // NEW: total session time remaining
+    private final Label sessionLabel;
 
     private int sessionRemainingSeconds;
 
     private static final String FOCUS_ACCENT = "#7C6EFA";
     private static final String BREAK_ACCENT = "#3ecfcf";
-    private static final String DONE_ACCENT = "#f0a500";
+    private static final String DONE_ACCENT  = "#f0a500";
 
-    // Callback fired when the session ends — BrowserLauncher listens to this
     private Runnable onSessionEndCallback;
+
+    // ── New fields for break-mode blocking ───────────────────────────────────
+    private FocusStateHolder focusStateHolder;
+    private BrowserController browserController;
 
     public TimerOverlay(String topic, int totalSessionMinutes) {
 
         this.sessionRemainingSeconds = totalSessionMinutes * 60;
 
-        modeLabel = new Label("FOCUS");
-        timerLabel = new Label("--:--");
-        topicLabel = new Label(topic.length() > 18 ? topic.substring(0, 18) + "…" : topic);
+        modeLabel    = new Label("FOCUS");
+        timerLabel   = new Label("--:--");
+        topicLabel   = new Label(topic.length() > 18
+                ? topic.substring(0, 18) + "…" : topic);
         sessionLabel = new Label("Session: " + formatTime(sessionRemainingSeconds));
 
         styleLabels();
@@ -41,15 +47,23 @@ public class TimerOverlay extends VBox implements TimerObserver {
         setPadding(new Insets(12, 18, 14, 18));
         setSpacing(2);
         setMaxWidth(170);
-
         setStyle(buildCardStyle(FOCUS_ACCENT));
 
         getChildren().addAll(topicLabel, modeLabel, timerLabel, sessionLabel);
-
     }
+
+    // ── Setters for break-mode wiring ────────────────────────────────────────
 
     public void setOnSessionEndCallback(Runnable callback) {
         this.onSessionEndCallback = callback;
+    }
+
+    public void setFocusStateHolder(FocusStateHolder holder) {
+        this.focusStateHolder = holder;
+    }
+
+    public void setBrowserController(BrowserController controller) {
+        this.browserController = controller;
     }
 
     // ── TimerObserver ────────────────────────────────────────────────────────
@@ -65,6 +79,15 @@ public class TimerOverlay extends VBox implements TimerObserver {
 
     @Override
     public void onModeChange(boolean isFocus) {
+        // Update shared state so BrowserController knows the current mode
+        if (focusStateHolder != null) {
+            focusStateHolder.setFocusMode(isFocus);
+        }
+        // Clear cached verdicts so a site blocked during focus is immediately
+        // accessible on break, and vice versa
+        if (browserController != null) {
+            browserController.clearCache();
+        }
         Platform.runLater(() -> {
             String accent = isFocus ? FOCUS_ACCENT : BREAK_ACCENT;
             modeLabel.setText(isFocus ? "FOCUS" : "BREAK");
@@ -74,19 +97,23 @@ public class TimerOverlay extends VBox implements TimerObserver {
 
     @Override
     public void onSessionEnd() {
+        // Mark as not-focus so no blocking lingers after session ends
+        if (focusStateHolder != null) {
+            focusStateHolder.setFocusMode(false);
+        }
+        if (browserController != null) {
+            browserController.clearCache();
+        }
         Platform.runLater(() -> {
             modeLabel.setText("DONE ✓");
             timerLabel.setText("00:00");
             sessionLabel.setText("Session: 00:00");
             applyAccent(DONE_ACCENT);
 
-            // Wait 2 seconds so user sees DONE, then go back to homepage
-            javafx.animation.PauseTransition pause = new javafx.animation.PauseTransition(
-                    javafx.util.Duration.seconds(2));
+            javafx.animation.PauseTransition pause =
+                    new javafx.animation.PauseTransition(javafx.util.Duration.seconds(2));
             pause.setOnFinished(e -> {
-                if (onSessionEndCallback != null) {
-                    onSessionEndCallback.run();
-                }
+                if (onSessionEndCallback != null) onSessionEndCallback.run();
             });
             pause.play();
         });
@@ -97,31 +124,31 @@ public class TimerOverlay extends VBox implements TimerObserver {
     private void styleLabels() {
         topicLabel.setStyle(
                 "-fx-font-size: 10px;" +
-                        "-fx-text-fill: #999999;" +
-                        "-fx-font-family: 'Segoe UI', sans-serif;");
+                "-fx-text-fill: #999999;" +
+                "-fx-font-family: 'Segoe UI', sans-serif;");
         modeLabel.setStyle(
                 "-fx-font-size: 10px;" +
-                        "-fx-font-weight: bold;" +
-                        "-fx-text-fill: " + FOCUS_ACCENT + ";" +
-                        "-fx-font-family: 'Segoe UI', sans-serif;");
+                "-fx-font-weight: bold;" +
+                "-fx-text-fill: " + FOCUS_ACCENT + ";" +
+                "-fx-font-family: 'Segoe UI', sans-serif;");
         timerLabel.setStyle(
                 "-fx-font-size: 26px;" +
-                        "-fx-font-weight: bold;" +
-                        "-fx-text-fill: white;" +
-                        "-fx-font-family: 'Consolas', monospace;");
+                "-fx-font-weight: bold;" +
+                "-fx-text-fill: white;" +
+                "-fx-font-family: 'Consolas', monospace;");
         sessionLabel.setStyle(
                 "-fx-font-size: 10px;" +
-                        "-fx-text-fill: #777777;" +
-                        "-fx-font-family: 'Segoe UI', sans-serif;" +
-                        "-fx-padding: 3 0 0 0;");
+                "-fx-text-fill: #777777;" +
+                "-fx-font-family: 'Segoe UI', sans-serif;" +
+                "-fx-padding: 3 0 0 0;");
     }
 
     private void applyAccent(String color) {
         modeLabel.setStyle(
                 "-fx-font-size: 10px;" +
-                        "-fx-font-weight: bold;" +
-                        "-fx-text-fill: " + color + ";" +
-                        "-fx-font-family: 'Segoe UI', sans-serif;");
+                "-fx-font-weight: bold;" +
+                "-fx-text-fill: " + color + ";" +
+                "-fx-font-family: 'Segoe UI', sans-serif;");
         setStyle(buildCardStyle(color));
     }
 

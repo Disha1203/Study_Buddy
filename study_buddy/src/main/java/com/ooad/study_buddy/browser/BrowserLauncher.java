@@ -17,6 +17,7 @@ import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
+import com.ooad.study_buddy.focus.FocusStateHolder;
 
 /**
  * GRASP Controller: Owns the Stage and orchestrates scene transitions.
@@ -80,23 +81,28 @@ public class BrowserLauncher extends Application {
     // ── Session launch ────────────────────────────────────────────────────────
 
     private void launchSession(FocusSession session) {
+        FocusStateHolder focusStateHolder = new FocusStateHolder();
+
         TimerOverlay overlay = new TimerOverlay(
                 session.getTopic(),
                 session.getTotalDurationMinutes());
+
+        overlay.setFocusStateHolder(focusStateHolder);
+        overlay.setBrowserController(browserController);
         overlay.setOnSessionEndCallback(() -> Platform.runLater(this::showHomepage));
+
+        browserController.setFocusStateHolder(focusStateHolder);
+        browserController.clearCache();
 
         sessionController.startSession(session, overlay);
 
         AiBrowserView browser = new AiBrowserView();
         javafx.scene.layout.BorderPane view = browser.getView(
-                overlay,
-                browserController,
-                session.getTopic());
+                overlay, browserController, session.getTopic());
 
         Scene scene = new Scene(view, 1000, 600);
         primaryStage.setScene(scene);
         primaryStage.setTitle("Study Buddy — " + session.getTopic());
-
         browser.loadUrl("https://www.google.com");
     }
 

@@ -1,5 +1,6 @@
 package com.ooad.study_buddy.controller;
 
+import com.ooad.study_buddy.focus.FocusStateHolder;
 import com.ooad.study_buddy.model.ContentData;
 import com.ooad.study_buddy.model.RelevanceResult;
 import com.ooad.study_buddy.service.BlockingService;
@@ -15,19 +16,6 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.logging.Logger;
 
-/**
- * GRASP Controller: Owns the navigation-interception lifecycle for one WebView.
- *
- * FIX — data: URI suppression
- * ─────────────────────────────
- * Pages like medicalnewstoday.com embed media via data: URIs. WebKit fires
- * locationProperty changes for these, which triggered "Unsupported protocol"
- * warnings and spurious relevance evaluations. Both listeners now guard
- * against any URL that doesn't start with "http".
- *
- * All other logic (RTTexture NPE fix, blocking loop fix, BORDERLINE fix,
- * YouTube audio fix, double quickDecision fix) preserved unchanged.
- */
 @Component
 public class BrowserController {
 
@@ -54,6 +42,9 @@ public class BrowserController {
     // ── Re-entrance guard ──────────────────────────────────────────────────────
     private volatile boolean isHandling = false;
 
+    // ── Focus/break state ──────────────────────────────────────────────────────
+    private FocusStateHolder focusStateHolder;
+
     private final ContentExtractionService extractor;
     private final RelevanceController      relevanceController;
     private final BlockingService          blockingService;
@@ -69,38 +60,83 @@ public class BrowserController {
         this.blockingService     = blockingService;
     }
 
+    // ── Focus state wiring ────────────────────────────────────────────────────
+
+    public void setFocusStateHolder(FocusStateHolder holder) {
+        this.focusStateHolder = holder;
+    }
+
+    /**
+     * Returns true when it is currently break time, meaning all blocking
+     * should be skipped and every URL should be allowed through freely.
+     */
+    private boolean isBreakTime() {
+        return focusStateHolder != null && !focusStateHolder.isFocusMode();
+    }
+
     // ── Public API ────────────────────────────────────────────────────────────
 
+    /**
+     * Attaches interception listeners to {@code engine}.
+     * Safe to call multiple times — old listeners are removed first.
+     *
+     * @param engine   WebEngine to monitor
+     * @param topic    current study topic
+     * @param onResult (url, result) callback — always on FX thread
+     */
     public void attach(WebEngine engine, String topic,
                        BiConsumer<String, RelevanceResult> onResult) {
 
+        // ── Remove stale listeners ─────────────────────────────────────────
         if (locationListener != null)
             engine.locationProperty().removeListener(locationListener);
         if (stateListener != null)
             engine.getLoadWorker().stateProperty().removeListener(stateListener);
         isHandling = false;
 
-        // ── PHASE 1 — locationProperty listener ───────────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // PHASE 1 — locationProperty listener
+        //   Fires as soon as WebEngine accepts a new URL (BEFORE network).
+        //   Used for INSTANT decisions: whitelist / blacklist / platform rules.
+        //   CHECK_RELEVANCE URLs are NOT decided here — they wait for the DOM.
+        //
+        //   CRITICAL: Never call engine.load(), engine.stop(), or
+        //   getLoadWorker().cancel() directly in this callback.
+        //   Always defer engine mutations via Platform.runLater().
+        // ══════════════════════════════════════════════════════════════════
         locationListener = (obs, oldUrl, newUrl) -> {
 
-            // Guard: ignore blank, about:blank, data: URIs, and non-http URLs.
-            // data: URIs come from embedded media (e.g. medicalnewstoday images)
-            // and must not be evaluated — they produce "Unsupported protocol" warnings.
-            if (!isEvaluableUrl(newUrl)) return;
+            // Guard 1: ignore empty / about:blank / non-http URLs
+            if (newUrl == null || newUrl.isBlank()
+                    || newUrl.equals("about:blank")
+                    || !newUrl.startsWith("http")) {
+                return;
+            }
 
+            // Guard 2: suppress URLs triggered by our own cancel() / load()
             if (isHandling) {
                 LOG.fine("[BROWSER] Suppressing re-entrant location event: " + newUrl);
                 return;
             }
 
+            // Guard 3: same URL blocked less than COOLDOWN_MS ago → skip
             Long lastBlocked = lastBlockedAt.get(newUrl);
             if (lastBlocked != null && (System.currentTimeMillis() - lastBlocked) < COOLDOWN_MS) {
                 LOG.fine("[BROWSER] Cooldown active for: " + newUrl);
                 return;
             }
 
+            // ── Break time: skip all blocking ─────────────────────────────
+            if (isBreakTime()) {
+                LOG.info("[BROWSER] Break time — allowing (location): " + newUrl);
+                onResult.accept(newUrl,
+                        RelevanceResult.allowed(1.0, "Break time — all sites allowed."));
+                return;
+            }
+
             LOG.info("[BROWSER] Location changed → " + newUrl);
 
+            // Cache hit (previous decision for this URL)
             if (cache.containsKey(newUrl)) {
                 RelevanceResult cached = cache.get(newUrl);
                 LOG.info("[BROWSER] Cache hit for " + newUrl + " → " + cached.getVerdict());
@@ -110,6 +146,7 @@ public class BrowserController {
                 return;
             }
 
+            // Quick structural decision — no DOM needed
             BlockingService.Decision quick = blockingService.quickDecision(newUrl);
             LOG.info("[BROWSER] quickDecision(" + newUrl + ") = " + quick);
 
@@ -128,20 +165,38 @@ public class BrowserController {
         };
         engine.locationProperty().addListener(locationListener);
 
-        // ── PHASE 2 — stateProperty SUCCEEDED listener ────────────────────────
+        // ══════════════════════════════════════════════════════════════════
+        // PHASE 2 — stateProperty SUCCEEDED listener
+        //   Fires once the DOM is fully loaded and JS is executable.
+        //   Only runs the full relevance chain for CHECK_RELEVANCE URLs.
+        // ══════════════════════════════════════════════════════════════════
         stateListener = (obs, oldState, newState) -> {
             if (newState != Worker.State.SUCCEEDED) return;
 
             String url = engine.getLocation();
 
-            // Guard: ignore blank, about:blank, data: URIs, and non-http URLs.
-            if (!isEvaluableUrl(url)) return;
+            // Guard: ignore blank / about:blank
+            if (url == null || url.isBlank()
+                    || url.equals("about:blank")
+                    || !url.startsWith("http")) {
+                return;
+            }
 
+            // ── Break time: skip all blocking ─────────────────────────────
+            if (isBreakTime()) {
+                LOG.fine("[BROWSER] Break time — skipping relevance for: " + url);
+                onResult.accept(url,
+                        RelevanceResult.allowed(1.0, "Break time — all sites allowed."));
+                return;
+            }
+
+            // Already decided in phase 1 or cached
             if (cache.containsKey(url)) {
                 LOG.fine("[BROWSER] SUCCEEDED but result already cached for: " + url);
                 return;
             }
 
+            // Only run the chain for URLs that need content evaluation
             BlockingService.Decision quick = blockingService.quickDecision(url);
             if (quick != BlockingService.Decision.CHECK_RELEVANCE) {
                 LOG.fine("[BROWSER] SUCCEEDED: quick=" + quick + " (no chain needed) for " + url);
@@ -150,10 +205,12 @@ public class BrowserController {
 
             LOG.info("[BROWSER] SUCCEEDED — running relevance chain for: " + url);
 
+            // Extract page content from the loaded DOM
             ContentData data = extractor.extract(engine, url);
             int contentLen = (data.toCombinedText() != null) ? data.toCombinedText().length() : 0;
             LOG.info("[BROWSER] Extracted content length: " + contentLen + " chars for " + url);
 
+            // Run the full Chain-of-Responsibility
             RelevanceResult result = relevanceController.evaluate(topic, data);
             LOG.info(String.format("[BROWSER] Relevance result for %s → verdict=%s score=%.3f reason='%s'",
                     url, result.getVerdict(), result.getScore(), result.getReason()));
@@ -170,19 +227,14 @@ public class BrowserController {
         engine.getLoadWorker().stateProperty().addListener(stateListener);
     }
 
-    /** Clears the result cache (call when starting a new session). */
+    /** Clears the result cache (call when starting a new session or on mode flip). */
     public void clearCache() {
         cache.clear();
         lastBlockedAt.clear();
         isHandling = false;
     }
 
-    /**
-     * Evicts a single URL from the cache so the next visit is re-evaluated.
-     * Called by AiBrowserView when the user clicks "Go Back" from a block page,
-     * ensuring a Refresh after Go Back performs a fresh relevance check rather
-     * than immediately re-showing the block page from the stale cached verdict.
-     */
+    /** Evicts a single URL from the cache so the next visit is re-evaluated. */
     public void evict(String url) {
         if (url != null) {
             cache.remove(url);
@@ -192,40 +244,22 @@ public class BrowserController {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /**
-     * Returns true only for URLs that should be evaluated for relevance.
-     *
-     * Rejected:
-     *   - null / blank
-     *   - "about:blank"
-     *   - "data:..." (embedded media — causes "Unsupported protocol" warnings)
-     *   - anything not starting with "http"
-     */
-    private boolean isEvaluableUrl(String url) {
-        if (url == null || url.isBlank()) return false;
-        if (url.equals("about:blank"))    return false;
-        if (url.startsWith("data:"))      return false;
-        if (!url.startsWith("http"))      return false;
-        return true;
-    }
-
     private void dispatchBlock(WebEngine engine, String url,
-        RelevanceResult result,
-        BiConsumer<String, RelevanceResult> onResult) {
+                               RelevanceResult result,
+                               BiConsumer<String, RelevanceResult> onResult) {
         LOG.info("[BROWSER] BLOCKING: " + url + " (score=" + result.getScore() + ")");
         isHandling = true;
 
         Platform.runLater(() -> {
-        try {
-            pauseAllMedia(engine);
-            // Load about:blank instead of cancel() — avoids RTTexture teardown mid-frame
-            engine.load("about:blank");
-        } catch (Exception ex) {
-            LOG.warning("[BROWSER] load(about:blank) threw: " + ex.getMessage());
-        } finally {
-            onResult.accept(url, result);
-            isHandling = false;
-        }
+            try {
+                pauseAllMedia(engine);
+                engine.getLoadWorker().cancel();
+            } catch (Exception ex) {
+                LOG.warning("[BROWSER] cancel() threw: " + ex.getMessage());
+            } finally {
+                onResult.accept(url, result);
+                isHandling = false;
+            }
         });
     }
 

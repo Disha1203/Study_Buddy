@@ -2,6 +2,7 @@ package com.ooad.study_buddy.focus.ui;
 
 import com.ooad.study_buddy.focus.controller.SessionController;
 import com.ooad.study_buddy.focus.model.FocusSession;
+import com.ooad.study_buddy.focus.strategy.Dev1010Strategy;
 import com.ooad.study_buddy.focus.strategy.Extended5010Strategy;
 import com.ooad.study_buddy.focus.strategy.PomodoroStrategy;
 import com.ooad.study_buddy.focus.strategy.Standard2505Strategy;
@@ -16,11 +17,7 @@ import javafx.scene.text.TextAlignment;
 import java.util.function.Consumer;
 
 /**
- * VIEW — Homepage / Session Setup  (fixed)
- *
- * KEY FIX: HomepageView now accepts a TopicValidationService and calls
- * validate() before constructing the FocusSession.  This catches vague /
- * invalid topics at the UI layer before any session state is created.
+ * VIEW — Homepage / Session Setup
  *
  * SRP: Only responsible for rendering the homepage setup form.
  * SOLID DIP: Delegates session logic to SessionController.
@@ -34,12 +31,12 @@ public class HomepageView {
 
     private static final PomodoroStrategy[] STRATEGIES = {
             new Standard2505Strategy(),
-            new Extended5010Strategy()
+            new Extended5010Strategy(),
+            new Dev1010Strategy()       // DEV ONLY — remove before shipping
     };
 
     // ── Constructors ──────────────────────────────────────────────────────────
 
-    /** Full constructor — use this one. */
     public HomepageView(SessionController controller,
                         Consumer<FocusSession> onSessionStart,
                         TopicValidationService validator) {
@@ -48,7 +45,6 @@ public class HomepageView {
         this.validator      = validator;
     }
 
-    /** Backward-compat constructor (no validator — topic is not pre-validated). */
     public HomepageView(SessionController controller,
                         Consumer<FocusSession> onSessionStart) {
         this(controller, onSessionStart, new TopicValidationService());
@@ -93,13 +89,13 @@ public class HomepageView {
         VBox headerBox = new VBox(6, appTitle, heading, subheading);
         headerBox.setAlignment(Pos.CENTER);
 
-        Label topicLabel    = fieldLabel("Session Topic");
+        Label topicLabel     = fieldLabel("Session Topic");
         TextField topicField = styledTextField("e.g. Operating Systems — Chapter 4");
 
-        Label durationLabel    = fieldLabel("Total Duration (minutes)");
+        Label durationLabel     = fieldLabel("Total Duration (minutes)");
         TextField durationField = styledTextField("e.g. 60");
 
-        Label modeLabel     = fieldLabel("Pomodoro Mode");
+        Label modeLabel       = fieldLabel("Pomodoro Mode");
         ToggleGroup modeGroup = new ToggleGroup();
 
         HBox modeRow = new HBox(10);
@@ -125,9 +121,12 @@ public class HomepageView {
                 "-fx-background-radius: 12;" +
                 "-fx-cursor: hand;" +
                 "-fx-font-family: 'Segoe UI', sans-serif;");
-        startBtn.setOnMouseEntered(e -> startBtn.setStyle(startBtn.getStyle().replace("#7C6EFA", "#9A8FFF")));
-        startBtn.setOnMouseExited(e  -> startBtn.setStyle(startBtn.getStyle().replace("#9A8FFF", "#7C6EFA")));
-        startBtn.setOnAction(e -> handleStart(topicField, durationField, modeGroup, errorLabel));
+        startBtn.setOnMouseEntered(e ->
+                startBtn.setStyle(startBtn.getStyle().replace("#7C6EFA", "#9A8FFF")));
+        startBtn.setOnMouseExited(e ->
+                startBtn.setStyle(startBtn.getStyle().replace("#9A8FFF", "#7C6EFA")));
+        startBtn.setOnAction(e ->
+                handleStart(topicField, durationField, modeGroup, errorLabel));
 
         VBox form = new VBox(10,
                 topicLabel, topicField,
@@ -160,14 +159,12 @@ public class HomepageView {
                              ToggleGroup modeGroup, Label errorLabel) {
         String rawTopic = topicField.getText().trim();
 
-        // ── Topic validation (FIX: now actually calls validator) ──────────
         Topic topic = validator.validate(rawTopic);
         if (!topic.isValid()) {
             errorLabel.setText("⚠ " + topic.getValidationError());
             return;
         }
 
-        // ── Duration parsing ──────────────────────────────────────────────
         int duration;
         try {
             duration = Integer.parseInt(durationField.getText().trim());
@@ -177,14 +174,13 @@ public class HomepageView {
             return;
         }
 
-        // ── Strategy selection ────────────────────────────────────────────
         Toggle selected = modeGroup.getSelectedToggle();
         if (selected == null) {
             errorLabel.setText("⚠ Please select a Pomodoro mode.");
             return;
         }
 
-        int strategyIndex = modeGroup.getToggles().indexOf(selected);
+        int strategyIndex  = modeGroup.getToggles().indexOf(selected);
         PomodoroStrategy strategy = STRATEGIES[strategyIndex];
 
         errorLabel.setText("");
