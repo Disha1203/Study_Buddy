@@ -20,23 +20,13 @@ import java.util.Deque;
  * SRP  : Owns browser UI layout, tab management, and navigation bar.
  * DIP  : Accepts BrowserController; never calls services directly.
  *
- * Each tab is a self-contained TabState (WebView + history + content pane).
- * The nav bar always operates on the currently selected tab.
+ * FIX — Go Back from block page now evicts the blocked URL from the
+ *        BrowserController cache before navigating away. Previously the
+ *        BLOCK result was cached, so pressing Refresh after Go Back
+ *        immediately re-triggered the block page without re-evaluating
+ *        the content. Now a fresh evaluation runs on the next load.
  *
- * ═══════════════════════════════════════════════════════════════
- *  BUG FIX (merged from single-tab version)
- * ═══════════════════════════════════════════════════════════════
- *  BUG — BORDERLINE verdict silently allowed through
- *  ──────────────────────────────────────────────────────────────
- *  handleRelevanceResult() only checked result.isBlocked(). A BORDERLINE
- *  result (score 0.40–0.65) fell into the else-branch and was treated as
- *  ALLOWED. This is incorrect in two ways:
- *    a) Ambiguous pages should be blocked by default (stricter = safer).
- *    b) When the Python service is down, RelevanceService returns
- *       BORDERLINE(0.5) as a network fallback — meaning any page loads
- *       freely during a service outage.
- *  Fix: the block condition is now `isBlocked() || isBorderline()`.
- * ═══════════════════════════════════════════════════════════════
+ * FIX — BORDERLINE verdict treated as BLOCKED (preserves existing behaviour).
  */
 public class AiBrowserView {
 
@@ -75,7 +65,6 @@ public class AiBrowserView {
                 "-fx-background-color: #2c2c3c;" +
                 "-fx-text-fill: white;" +
                 "-fx-prompt-text-fill: #aaaaaa;" +
-                // Cross-platform font fallback chain
                 "-fx-font-family: 'Segoe UI', 'SF Pro Display', 'Helvetica Neue', sans-serif;");
     }
 
@@ -93,7 +82,6 @@ public class AiBrowserView {
         root.setCenter(buildTabArea(overlay));
         root.setStyle("-fx-background-color: #0f0f0f;");
 
-        // Open the first tab
         addNewTab("New Tab");
 
         return root;
@@ -105,7 +93,6 @@ public class AiBrowserView {
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
         tabPane.setStyle("-fx-background-color: #0f0f0f;");
 
-        // Sync URL bar with active tab's current URL on tab switch
         tabPane.getSelectionModel().selectedItemProperty().addListener(
                 (obs, oldTab, newTab) -> {
                     if (newTab != null) {
@@ -117,13 +104,12 @@ public class AiBrowserView {
                     }
                 });
 
-        // Overlay: floats over all tabs via a StackPane + transparent AnchorPane
         if (overlay != null) {
             overlay.setMaxWidth(160);
             overlay.setPrefWidth(160);
 
             AnchorPane overlayLayer = new AnchorPane();
-            overlayLayer.setMouseTransparent(true); // clicks pass through to tabs
+            overlayLayer.setMouseTransparent(true);
             overlayLayer.setPickOnBounds(false);
             AnchorPane.setBottomAnchor(overlay, 16.0);
             AnchorPane.setRightAnchor(overlay, 16.0);
@@ -149,7 +135,6 @@ public class AiBrowserView {
         tab.setUserData(state);
         tab.setStyle("-fx-background-color: #1a1a2e;");
 
-        // Sync URL bar when this tab navigates
         state.webEngine.locationProperty().addListener((obs, oldVal, newVal) -> {
             if (newVal != null && !newVal.isBlank()) {
                 if (tabPane.getSelectionModel().getSelectedItem() == tab) {
@@ -158,7 +143,6 @@ public class AiBrowserView {
             }
         });
 
-        // Update tab label from page title
         state.webEngine.titleProperty().addListener((obs, oldVal, newVal) -> {
             if (newVal != null && !newVal.isBlank()) {
                 String label = newVal.length() > 20 ? newVal.substring(0, 20) + "…" : newVal;
@@ -166,7 +150,6 @@ public class AiBrowserView {
             }
         });
 
-        // Wire relevance checking for this tab
         browserController.attach(state.webEngine, topic, (url, result) ->
                 Platform.runLater(() -> handleRelevanceResult(url, result, state, tab)));
 
@@ -202,18 +185,19 @@ public class AiBrowserView {
 
     private void handleRelevanceResult(String url, RelevanceResult result,
                                        TabState state, Tab tab) {
-        // BUG FIX: also block BORDERLINE — don't silently allow uncertain pages.
-        // When the Python service is down it returns BORDERLINE(0.5) as fallback,
-        // which previously allowed every page through during a service outage.
         if (result.isBlocked() || result.isBorderline()) {
             BlockPageView blockPageView = new BlockPageView();
             BorderPane blockPage = blockPageView.getView(result, url, () -> {
+                // FIX: Evict the blocked URL from the cache before going back.
+                // Without this, the cached BLOCK result fires again on any
+                // subsequent load of the same URL (e.g. pressing Refresh),
+                // preventing the user from ever reaching the page after go-back.
+                browserController.evict(url);
                 tab.setContent(state.contentPane);
                 goBack();
             });
             tab.setContent(blockPage);
         } else {
-            // Ensure the WebView content pane is showing (restores after a block)
             tab.setContent(state.contentPane);
         }
     }
@@ -234,7 +218,6 @@ public class AiBrowserView {
         goBtn.setOnAction(e -> loadUrl(urlField.getText().trim()));
         urlField.setOnAction(e -> loadUrl(urlField.getText().trim()));
 
-        // "+" opens a new tab and loads Google as the default start page
         Button newTabBtn = navButton("+");
         newTabBtn.setStyle(newTabBtn.getStyle() +
                 "-fx-text-fill: #7C6EFA; -fx-font-weight: bold;");

@@ -13,52 +13,10 @@ import java.util.logging.Logger;
 /**
  * SERVICE — Blocking rules & platform-specific logic
  *
- * ═══════════════════════════════════════════════════════════════
- *  BUG FIXES (vs previous version)
- * ═══════════════════════════════════════════════════════════════
- *
- *  BUG 1 — YouTube Shorts not consistently blocked
- *  ─────────────────────────────────────────────────
- *  ROOT CAUSE: The path check was case-sensitive and didn't account for
- *  "/shorts/" (with trailing slash + video ID). The check was:
- *    if (p.startsWith("/shorts"))
- *  which correctly catches "/shorts" and "/shorts/abc123", BUT only after
- *  the normalization step. The normalization removed trailing slash from
- *  the root path only when length > 1, so "/shorts/" (slash on a top-level
- *  Shorts listing) was being normalized to "/shorts" — that was fine.
- *  The actual problem was a URL like "https://youtube.com/shorts" (no trailing
- *  slash) which URI.getPath() returns as "/shorts" — this WAS being caught.
- *
- *  Re-investigation: the real Shorts blocking failure was that the URL
- *  sometimes arrives as "https://www.youtube.com/shorts/ABC123?feature=share"
- *  and the query string is stripped by URI.getPath() correctly. This path
- *  SHOULD have been caught. The failure was actually in the CACHING: if
- *  the homepage "youtube.com/" was visited first and cached as ALLOW, then
- *  the locationListener saw the Shorts URL, found it NOT in cache, ran
- *  quickDecision → BLOCK, tried to cancel(), but cancel() was called
- *  synchronously causing the crash → the block never showed.
- *
- *  FIX: The real fix is in BrowserController (deferred cancel). This class
- *  is already correct for Shorts. Added explicit logging so Shorts blocks
- *  are visible in the console.
- *
- *  BUG 2 — normalizeDomain not called consistently in whitelist/blacklist
- *  ────────────────────────────────────────────────────────────────────────
- *  ROOT CAUSE: whitelist() and blacklist() called normalizeDomain() before
- *  calling upsert(), but upsert() also re-applied normalizeDomain() (double
- *  normalization was harmless but confusing). isWhitelisted/isBlacklisted
- *  also called normalizeDomain() on their input. All fine — no bug here,
- *  but cleaned up for clarity.
- *
- *  BUG 3 — BlockingServiceAdditions.java was a separate file
- *  ────────────────────────────────────────────────────────────
- *  ROOT CAUSE: Extra methods needed by WhitelistManagerView were in a
- *  separate stub file and never merged into the actual service.
- *
- *  FIX: removeDomain(), getAllWhitelisted(), getAllBlacklisted() are merged
- *  into this class.
- *
- * ═══════════════════════════════════════════════════════════════
+ * CHANGE: YouTube homepage ("/") now returns ALLOW instead of CHECK_RELEVANCE.
+ *         Users need to navigate from the YouTube homepage; blocking it
+ *         immediately is confusing. Only individual videos (/watch), search
+ *         results (/results), and Shorts (/shorts) are evaluated or blocked.
  */
 @Service
 public class BlockingService {
@@ -135,10 +93,6 @@ public class BlockingService {
         upsert(normalizeDomain(domain), SiteMetadata.RuleType.BLACKLIST, notes);
     }
 
-    /**
-     * Removes any whitelist or blacklist entry for the given domain.
-     * (Merged from BlockingServiceAdditions.java)
-     */
     public void removeDomain(String domain) {
         String normalized = normalizeDomain(domain);
         ruleRepo.findByDomain(normalized).ifPresent(ruleRepo::delete);
@@ -154,10 +108,6 @@ public class BlockingService {
                 normalizeDomain(domain), SiteMetadata.RuleType.BLACKLIST);
     }
 
-    /**
-     * Returns all whitelisted domains, sorted alphabetically.
-     * (Merged from BlockingServiceAdditions.java)
-     */
     public List<String> getAllWhitelisted() {
         return ruleRepo.findAll().stream()
                 .filter(m -> m.getRuleType() == SiteMetadata.RuleType.WHITELIST)
@@ -166,10 +116,6 @@ public class BlockingService {
                 .toList();
     }
 
-    /**
-     * Returns all blacklisted domains, sorted alphabetically.
-     * (Merged from BlockingServiceAdditions.java)
-     */
     public List<String> getAllBlacklisted() {
         return ruleRepo.findAll().stream()
                 .filter(m -> m.getRuleType() == SiteMetadata.RuleType.BLACKLIST)
@@ -182,18 +128,24 @@ public class BlockingService {
 
     /**
      * YouTube path rules:
-     *   /shorts/*   → BLOCK  (Shorts: always distraction)
-     *   /watch      → CHECK_RELEVANCE (video title checked against topic)
+     *   /           → ALLOW   (homepage — user needs a starting point)
+     *   /shorts/*   → BLOCK   (Shorts: always distraction)
+     *   /watch      → CHECK_RELEVANCE (video evaluated against topic)
      *   /results    → CHECK_RELEVANCE (search results)
-     *   /           → CHECK_RELEVANCE (homepage — not unconditionally allowed)
      *   anything else → CHECK_RELEVANCE
+     *
+     * FIX: "/" was previously CHECK_RELEVANCE which caused the YouTube
+     * homepage to be blocked on first visit (empty-page content scores 0).
      */
     private Decision youtubeDecision(String path) {
-        if (path == null || path.isBlank()) return Decision.CHECK_RELEVANCE;
+        if (path == null || path.isBlank()) return Decision.ALLOW;
 
         // Normalize: remove trailing slash unless it IS the root
         String p = (path.length() > 1 && path.endsWith("/"))
                 ? path.substring(0, path.length() - 1) : path;
+
+        // Homepage — always allow (let user navigate to a video first)
+        if (p.equals("/") || p.isBlank()) return Decision.ALLOW;
 
         // Shorts — always block, no content check needed
         if (p.startsWith("/shorts")) return Decision.BLOCK;
@@ -201,6 +153,7 @@ public class BlockingService {
         if (p.startsWith("/watch"))   return Decision.CHECK_RELEVANCE;
         if (p.startsWith("/results")) return Decision.CHECK_RELEVANCE;
 
+        // Channel pages, playlists, etc. — check relevance
         return Decision.CHECK_RELEVANCE;
     }
 
@@ -247,10 +200,6 @@ public class BlockingService {
         catch (Exception e) { return ""; }
     }
 
-    /**
-     * Strips "www." prefix only. Preserves meaningful subdomains like
-     * "scholar.google.com" or "old.reddit.com".
-     */
     public String normalizeDomain(String domain) {
         if (domain == null) return "";
         return domain.toLowerCase().replaceFirst("^www\\.", "");
