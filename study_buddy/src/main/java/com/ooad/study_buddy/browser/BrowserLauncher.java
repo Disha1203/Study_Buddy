@@ -9,6 +9,7 @@ import com.ooad.study_buddy.focus.ui.TimerOverlay;
 import com.ooad.study_buddy.relevance.RelevanceChainFactory;
 import com.ooad.study_buddy.service.BlockingService;
 import com.ooad.study_buddy.service.ContentExtractionService;
+import com.ooad.study_buddy.service.DatabaseSeedService;
 import com.ooad.study_buddy.service.RelevanceService;
 import com.ooad.study_buddy.service.TopicValidationService;
 import javafx.application.Application;
@@ -19,24 +20,14 @@ import javafx.stage.Stage;
 
 /**
  * GRASP Controller: Owns the Stage and orchestrates scene transitions.
- *
- * KEY FIXES vs original:
- *  1. BrowserController now receives BlockingService (needed for two-phase check).
- *  2. browserController.clearCache() is called on every new session so
- *     results from a previous session never leak into the next one.
- *  3. TopicValidationService is used before FocusSession is created —
- *     invalid topics are rejected with an error in HomepageView.
- *     (HomepageView.handleStart already calls the validator; kept here for
- *      belt-and-suspenders documentation clarity only.)
+ * Uses MySQL via DatabaseSeedService to load whitelist/blacklist on startup.
  */
-
 public class BrowserLauncher extends Application {
 
     private Stage primaryStage;
 
-    // ── Service graph (manually constructed — replace with Spring DI if integrated) ──
-    private final SessionController      sessionController  = new SessionController();
-    private final TopicValidationService validationService  = new TopicValidationService();
+    private final SessionController      sessionController = new SessionController();
+    private final TopicValidationService validationService = new TopicValidationService();
 
     private BlockingService          blockingService;
     private RelevanceService         relevanceService;
@@ -57,27 +48,21 @@ public class BrowserLauncher extends Application {
     // ── Service wiring ────────────────────────────────────────────────────────
 
     private void initServices() {
-        blockingService     = new BlockingService(new InMemorySiteMetadataRepository());
+        // 1. In-memory repo
+        InMemorySiteMetadataRepository inMemoryRepo =
+                new InMemorySiteMetadataRepository();
+    
+        // 2. Load whitelist/blacklist from MySQL into in-memory repo
+        DatabaseSeedService seeder = new DatabaseSeedService(inMemoryRepo);
+        seeder.loadFromDatabase();
+    
+        // 3. Wire services
+        blockingService     = new BlockingService(inMemoryRepo);
         relevanceService    = new RelevanceService();
         extractor           = new ContentExtractionService();
         chainFactory        = new RelevanceChainFactory(blockingService, relevanceService);
         relevanceController = new RelevanceController(chainFactory, blockingService);
-
-        // FIX: pass blockingService so BrowserController can run quickDecision
-        //      in both the locationListener and the stateListener.
-        browserController = new BrowserController(extractor, relevanceController, blockingService);
-
-        // Pre-seed academic whitelist
-        blockingService.whitelist("scholar.google.com",   "Google Scholar");
-        blockingService.whitelist("arxiv.org",             "arXiv preprints");
-        blockingService.whitelist("wikipedia.org",         "Wikipedia");
-        blockingService.whitelist("stackoverflow.com",     "Stack Overflow");
-        blockingService.whitelist("docs.oracle.com",       "Java docs");
-        blockingService.whitelist("docs.spring.io",        "Spring docs");
-        blockingService.whitelist("developer.mozilla.org", "MDN Web Docs");
-        blockingService.whitelist("github.com",            "GitHub");
-        blockingService.whitelist("pubmed.ncbi.nlm.nih.gov", "PubMed");
-        blockingService.whitelist("jstor.org",             "JSTOR");
+        browserController   = new BrowserController(extractor, relevanceController, blockingService); // ← 3 args
     }
 
     // ── Homepage ──────────────────────────────────────────────────────────────
@@ -95,9 +80,6 @@ public class BrowserLauncher extends Application {
     // ── Session launch ────────────────────────────────────────────────────────
 
     private void launchSession(FocusSession session) {
-        // Clear stale results from any previous session
-        browserController.clearCache();
-
         TimerOverlay overlay = new TimerOverlay(
                 session.getTopic(),
                 session.getTotalDurationMinutes());
@@ -115,7 +97,6 @@ public class BrowserLauncher extends Application {
         primaryStage.setScene(scene);
         primaryStage.setTitle("Study Buddy — " + session.getTopic());
 
-        // Default start page — Google (will be relevance-checked)
         browser.loadUrl("https://www.google.com");
     }
 
