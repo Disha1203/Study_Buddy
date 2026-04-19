@@ -52,6 +52,7 @@ public class Step3Probe extends Application {
 
                 // ───── DISCUSSION ─────
                 "https://reddit.com/r/learnprogramming/",
+                "https://www.reddit.com/r/MachineLearning/comments/1g9o9x3/how_do_we_move_beyond_neural_networks_discussion/",
 
                 // ───── EDGE CASE ─────
                 "about:blank"

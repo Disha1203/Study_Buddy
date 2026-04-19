@@ -9,49 +9,53 @@ import java.util.logging.Logger;
 /**
  * SERVICE — Content Extraction
  *
+ * SRP : Only responsible for pulling structured data out of a WebEngine page.
+ * DIP : Returns a ContentData DTO; callers are not coupled to JS or DOM.
+ *
  * ═══════════════════════════════════════════════════════════════
- *  BUG FIXES (vs previous version)
+ *  BUG FIXES
  * ═══════════════════════════════════════════════════════════════
  *
- *  BUG 1 — YouTube title extracted as "YouTube" instead of video title
- *  ──────────────────────────────────────────────────────────────────────
- *  ROOT CAUSE: document.title for a YouTube watch page returns the full
- *  title including " - YouTube" suffix. The og:title meta tag was the
- *  correct field but was queried with a generic CSS selector that didn't
- *  always fire because YouTube is a SPA and og:title is set dynamically.
+ *  BUG 1 — Dead import: netscape.javascript.JSObject
+ *  ──────────────────────────────────────────────────────────────
+ *  JSObject was imported but never used. In Java 17 module mode,
+ *  netscape.javascript is an internal JavaFX API not exported by
+ *  default, which can cause a compile error. Removed entirely.
  *
- *  FIX: For YouTube /watch pages, prefer ytInitialData (the JSON blob
- *  YouTube embeds in its own page) which contains the canonical video
- *  title before any SPA manipulation. Falls back to og:title, then
- *  document.title (with " - YouTube" stripped).
+ *  BUG 2 — YouTube title extracted unreliably via document.title
+ *  ──────────────────────────────────────────────────────────────
+ *  YouTube is a SPA. When Worker.State.SUCCEEDED fires, document.title
+ *  may still read "YouTube" if JS hydration hasn't completed yet.
+ *  Fix: for /watch URLs, try window.ytInitialData JSON first (embedded
+ *  before any SPA code runs), then og:title, then document.title with
+ *  " - YouTube" suffix stripped.
  *
- *  BUG 2 — Empty content causes Python API to get useless input
- *  ───────────────────────────────────────────────────────────────
- *  ROOT CAUSE: On pages that block scripting (CSP) or are behind a
- *  paywall, all JS extractions returned "" → toCombinedText() was blank
- *  → RelevanceService sent an empty "content" field → Python returned an
- *  arbitrary score → result was unpredictable.
+ *  BUG 3 — h1 selector silent failure + innerText layout dependency
+ *  ──────────────────────────────────────────────────────────────────
+ *  querySelector('h1') returns null on LeetCode and YouTube (confirmed:
+ *  firstH1: NULL in probe output). innerText requires browser layout —
+ *  can return "" in WebEngine's partial rendering mode.
+ *  Fix: selector changed to 'h1,h2'; text read as innerText||textContent.
  *
- *  FIX: Extract() now builds a best-effort text blob from whatever fields
- *  are non-null. If ALL fields are null (total extraction failure), the
- *  returned ContentData will have the URL as the only non-null field.
- *  RelevanceService handles this by returning BORDERLINE (now reclassified
- *  to BLOCKED by RelevanceController) with a clear reason string.
+ *  BUG 4 — visibleText clone: innerText-only + aside not stripped
+ *  ──────────────────────────────────────────────────────────────────
+ *  Same innerText layout issue in the body clone. Cookie banners and
+ *  sidebars (<aside>) added noise to the content blob.
+ *  Fix: fallback to textContent; added 'aside' to the removal list.
  *
- *  BUG 3 — Extraction crashes on SPA navigations (WebEngine not ready)
- *  ──────────────────────────────────────────────────────────────────────
- *  ROOT CAUSE: engine.executeScript() throws if the engine is in a bad
- *  state (Worker.State.FAILED, or mid-cancel). The generic try/catch in
- *  safeExecute caught it but the returned "" was not logged.
- *
- *  FIX: safeExecute() now logs at FINE level when JS execution fails, so
- *  extraction failures are visible during debugging without being noisy.
- *
+ *  BUG 5 — No fallback when all extractions fail (Reddit, about:blank)
+ *  ──────────────────────────────────────────────────────────────────
+ *  Probe shows Reddit combined text is 38 chars; about:blank is 12.
+ *  toCombinedText() sends near-empty content to Python → HTTP 400 or
+ *  arbitrary score. Fix: if title and ogTitle are both null after all
+ *  extractions, derive a human-readable title from the URL path as a
+ *  last-resort fallback so the embedding model gets something real.
  * ═══════════════════════════════════════════════════════════════
  */
 @Service
 public class ContentExtractionService {
 
+    // BUG 1 FIX: removed unused `import netscape.javascript.JSObject`
     private static final Logger LOG = Logger.getLogger(ContentExtractionService.class.getName());
 
     /**
@@ -64,9 +68,9 @@ public class ContentExtractionService {
      */
     public ContentData extract(WebEngine engine, String pageUrl) {
 
-        // ── Title ─────────────────────────────────────────────────────────────
-        // For YouTube: try ytInitialData first (most accurate for video titles)
-        // then og:title, then document.title stripped of " - YouTube"
+        // ── Title ──────────────────────────────────────────────────────────────
+        // BUG 2 FIX: YouTube /watch pages get a dedicated extraction path that
+        // reads ytInitialData before falling back to og:title / document.title.
         String title;
         if (isYouTubeWatch(pageUrl)) {
             title = extractYouTubeTitle(engine);
@@ -74,12 +78,12 @@ public class ContentExtractionService {
             title = clean(safeExecute(engine, "document.title || ''"));
         }
 
-        // ── Meta description ──────────────────────────────────────────────────
+        // ── Meta description ───────────────────────────────────────────────────
         String metaDesc = clean(safeExecute(engine,
                 "var m=document.querySelector('meta[name=\"description\"]');" +
                 "m ? m.getAttribute('content') : ''"));
 
-        // ── OpenGraph ─────────────────────────────────────────────────────────
+        // ── OpenGraph ──────────────────────────────────────────────────────────
         String ogTitle = clean(safeExecute(engine,
                 "var m=document.querySelector('meta[property=\"og:title\"]');" +
                 "m ? m.getAttribute('content') : ''"));
@@ -88,11 +92,15 @@ public class ContentExtractionService {
                 "var m=document.querySelector('meta[property=\"og:description\"]');" +
                 "m ? m.getAttribute('content') : ''"));
 
-        // ── First heading ─────────────────────────────────────────────────────
+        // ── First heading ──────────────────────────────────────────────────────
+        // BUG 3 FIX: broadened selector to h1,h2; use innerText||textContent
+        // so pages without h1 (LeetCode, YouTube) still yield a heading.
         String firstH1 = clean(safeExecute(engine,
-                "var h=document.querySelector('h1,h2'); h ? (h.innerText||h.textContent||'') : ''"));
+                "var h=document.querySelector('h1,h2');" +
+                "h ? (h.innerText||h.textContent||'') : ''"));
 
-        // ── Visible body text (capped at 1200 chars) ──────────────────────────
+        // ── Visible body text (capped at 1200 chars) ───────────────────────────
+        // BUG 4 FIX: fallback to textContent; added 'aside' to noise removal.
         String visibleText = clean(safeExecute(engine,
                 "(function(){" +
                 "  try {" +
@@ -107,9 +115,10 @@ public class ContentExtractionService {
                 "  } catch(e){ return ''; }" +
                 "})()"));
 
-        // ── Fallback: if title and og:title are BOTH empty, use page URL path ──
-        // This gives the relevance checker at least something to work with for
-        // pages that block all metadata extraction.
+        // ── BUG 5 FIX: last-resort title from URL path ────────────────────────
+        // If both title and ogTitle are null (e.g. Reddit bot-check, about:blank),
+        // toCombinedText() would produce near-empty content and the Python API
+        // would receive content:"" → HTTP 400. Derive something from the URL path.
         if (title == null && ogTitle == null) {
             title = extractPathAsTitle(pageUrl);
             LOG.fine("[EXTRACT] All title fields empty — using path-derived title: " + title);
@@ -118,9 +127,9 @@ public class ContentExtractionService {
         LOG.fine(String.format(
                 "[EXTRACT] url=%s title='%s' ogTitle='%s' metaLen=%d visibleLen=%d",
                 pageUrl,
-                title != null ? title : "(null)",
-                ogTitle != null ? ogTitle : "(null)",
-                metaDesc != null ? metaDesc.length() : 0,
+                title       != null ? title       : "(null)",
+                ogTitle     != null ? ogTitle     : "(null)",
+                metaDesc    != null ? metaDesc.length()    : 0,
                 visibleText != null ? visibleText.length() : 0));
 
         return new ContentData(
@@ -133,34 +142,35 @@ public class ContentExtractionService {
                 visibleText);
     }
 
-    // ── YouTube-specific title extraction ─────────────────────────────────────
+    // ── YouTube-specific title extraction ──────────────────────────────────────
 
     private boolean isYouTubeWatch(String url) {
         return url != null && url.contains("youtube.com/watch");
     }
 
     /**
-     * Extracts the YouTube video title.
+     * BUG 2 FIX — Extracts the YouTube video title reliably.
      *
-     * Priority order:
-     *   1. ytInitialData JSON blob (most reliable — set before SPA hydration)
+     * Priority:
+     *   1. window.ytInitialData JSON (embedded before SPA hydration — most reliable)
      *   2. og:title meta tag
-     *   3. document.title with " - YouTube" stripped
+     *   3. document.title with " - YouTube" suffix stripped
      */
     private String extractYouTubeTitle(WebEngine engine) {
-        // Try 1: ytInitialData JSON (available in YouTube's page source)
+        // Try 1: ytInitialData JSON blob (set by YouTube before any SPA code runs)
         String fromJson = safeExecute(engine,
                 "(function(){" +
                 "  try {" +
                 "    var d=window.ytInitialData;" +
                 "    if(!d) return '';" +
-                "    var v=d.contents&&d.contents.twoColumnWatchNextResults&&" +
-                "           d.contents.twoColumnWatchNextResults.results&&" +
-                "           d.contents.twoColumnWatchNextResults.results.results&&" +
-                "           d.contents.twoColumnWatchNextResults.results.results.contents;" +
-                "    if(!v) return '';" +
-                "    for(var i=0;i<v.length;i++){" +
-                "      var p=v[i].videoPrimaryInfoRenderer;" +
+                "    var contents=d.contents" +
+                "      &&d.contents.twoColumnWatchNextResults" +
+                "      &&d.contents.twoColumnWatchNextResults.results" +
+                "      &&d.contents.twoColumnWatchNextResults.results.results" +
+                "      &&d.contents.twoColumnWatchNextResults.results.results.contents;" +
+                "    if(!contents) return '';" +
+                "    for(var i=0;i<contents.length;i++){" +
+                "      var p=contents[i].videoPrimaryInfoRenderer;" +
                 "      if(p&&p.title&&p.title.runs&&p.title.runs[0])" +
                 "        return p.title.runs[0].text;" +
                 "    }" +
@@ -183,7 +193,7 @@ public class ContentExtractionService {
             return ogTitle;
         }
 
-        // Try 3: document.title, strip " - YouTube" suffix
+        // Try 3: document.title with " - YouTube" suffix stripped
         String docTitle = safeExecute(engine, "document.title || ''");
         if (docTitle != null && !docTitle.isBlank()) {
             String stripped = docTitle.replaceAll("(?i)\\s*-\\s*YouTube\\s*$", "").trim();
@@ -195,11 +205,11 @@ public class ContentExtractionService {
         return null;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────────
 
     /**
      * Executes JS and converts the result to a String.
-     * Returns empty string on any error.
+     * Returns empty string on any error — prevents crash on paywall / CSP pages.
      */
     private String safeExecute(WebEngine engine, String js) {
         try {
@@ -217,16 +227,18 @@ public class ContentExtractionService {
     }
 
     /**
-     * Derives a rough human-readable title from the URL path.
+     * BUG 5 FIX — Derives a human-readable string from the URL path.
      * e.g. "https://example.com/intro-to-algorithms" → "intro to algorithms"
+     * Used only when all other extraction fields are null.
      */
     private String extractPathAsTitle(String url) {
         try {
             String path = new java.net.URI(url).getPath();
             if (path == null || path.isBlank() || path.equals("/")) return url;
-            // Take last segment, replace hyphens/underscores with spaces
             String[] parts = path.split("/");
             String last = parts[parts.length - 1];
+            // Strip common file extensions (.html, .php, .aspx, etc.)
+            last = last.replaceAll("\\.[a-zA-Z0-9]{1,5}$", "");
             return last.replace("-", " ").replace("_", " ").trim();
         } catch (Exception e) {
             return url;

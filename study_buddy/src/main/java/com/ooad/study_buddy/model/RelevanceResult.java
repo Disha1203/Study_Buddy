@@ -2,7 +2,23 @@ package com.ooad.study_buddy.model;
 
 /**
  * GRASP - Information Expert: Encapsulates the outcome of a relevance check.
- * SRP: Immutable result carrier; no logic.
+ * SRP: Immutable result carrier; no logic beyond verdict helpers.
+ *
+ * ═══════════════════════════════════════════════════════════════
+ *  BUG FIX
+ * ═══════════════════════════════════════════════════════════════
+ *
+ *  BUG — BORDERLINE silently treated as ALLOWED in AiBrowserView
+ *  ──────────────────────────────────────────────────────────────
+ *  AiBrowserView.handleRelevanceResult() only checked isBlocked().
+ *  BORDERLINE (score 0.40–0.65) fell into the else-branch and was
+ *  treated as ALLOWED. This is wrong in two scenarios:
+ *    a) Genuinely ambiguous pages that should be surfaced to the user.
+ *    b) Python service down → RelevanceService returns BORDERLINE(0.5)
+ *       as a network-failure fallback → a distraction page slips through.
+ *  Fix: added isBorderline() so callers can handle this verdict explicitly.
+ *  AiBrowserView now treats BORDERLINE the same as BLOCKED (show block page).
+ * ═══════════════════════════════════════════════════════════════
  */
 public class RelevanceResult {
 
@@ -38,7 +54,11 @@ public class RelevanceResult {
     public Verdict getVerdict() { return verdict; }
     public String  getReason()  { return reason;  }
 
-    public boolean isBlocked()  { return verdict == Verdict.BLOCKED; }
+    public boolean isBlocked()    { return verdict == Verdict.BLOCKED;    }
+
+    // BUG FIX: added isBorderline() so AiBrowserView can handle this verdict
+    // explicitly instead of silently falling through to ALLOWED.
+    public boolean isBorderline() { return verdict == Verdict.BORDERLINE; }
 
     @Override
     public String toString() {

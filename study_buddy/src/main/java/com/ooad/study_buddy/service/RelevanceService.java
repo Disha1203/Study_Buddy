@@ -1,5 +1,6 @@
 package com.ooad.study_buddy.service;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ooad.study_buddy.model.ContentData;
@@ -7,11 +8,10 @@ import com.ooad.study_buddy.model.RelevanceResult;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.logging.Logger;
 
 /**
@@ -20,66 +20,21 @@ import java.util.logging.Logger;
  * Calls the Python embedding API and maps the returned cosine score
  * to an ALLOWED / BORDERLINE / BLOCKED verdict.
  *
- * ══════════════════════════════════════════════════════════════
- *  BUG FIX — Thresholds recalibrated for raw cosine similarity
- * ══════════════════════════════════════════════════════════════
- *
- *  PROBLEM:
- *    The Python API was normalizing scores via (raw + 1) / 2, which
- *    compressed real cosine values into [0.55, 0.95]. This meant
- *    "watermelon" vs "malware analysis" scored 0.56 — right at the
- *    allow threshold — causing clearly unrelated pages to slip through.
- *
- *    With the Python fix (raw cosine clamped to [0,1]):
- *      - "watermelon" vs "malware analysis"  → raw ≈ 0.13
- *      - "PE header for malware"              → raw ≈ 0.60
- *      - "static analysis with IDA Pro"       → raw ≈ 0.72
- *
- *  OLD thresholds (calibrated for the distorted (x+1)/2 output):
- *    ALLOWED   >= 0.65
- *    BORDERLINE  0.40–0.65
- *    BLOCKED   <  0.40
- *
- *  NEW thresholds (calibrated for raw cosine output):
- *    ALLOWED   >= 0.55   ← lowered because raw scores are naturally lower
- *    BORDERLINE  0.35–0.55
- *    BLOCKED   <  0.35   ← "watermelon" at 0.13 is well below this
- *
- *  REASONING:
- *    With all-MiniLM-L6-v2, empirically:
- *      - Clearly related pairs:     raw cosine ≈ 0.55–0.90
- *      - Loosely related pairs:     raw cosine ≈ 0.35–0.55
- *      - Unrelated pairs:           raw cosine ≈ 0.05–0.25
- *    Setting ALLOW at 0.55 means only content with genuine semantic
- *    overlap is let through. 0.35–0.55 is borderline (promoted to
- *    BLOCKED by RelevanceController). Below 0.35 is clearly off-topic.
- *
- *  RESILIENCE:
- *    If the Python service is unreachable, the fallback is now
- *    BORDERLINE(0.30) — below the new BORDERLINE floor of 0.35 —
- *    so it gets promoted to BLOCKED by RelevanceController.
- *    Previously the fallback was BORDERLINE(0.5) which was above the
- *    old BORDERLINE floor and was therefore ALLOWED, meaning a dead
- *    Python service let ALL pages through.
- *
- * ══════════════════════════════════════════════════════════════
+ * Uses HttpURLConnection instead of HttpClient to avoid body-encoding
+ * issues that caused FastAPI to receive null body (HTTP 422).
  */
 @Service
 public class RelevanceService {
 
     private static final Logger LOG = Logger.getLogger(RelevanceService.class.getName());
 
-    // ── Thresholds (calibrated for RAW cosine similarity from Python v1.1) ────
-    // These match the /debug endpoint output with the fixed normalization.
-    private static final double THRESHOLD_ALLOWED    = 0.55;  // was 0.65
-    private static final double THRESHOLD_BORDERLINE = 0.35;  // was 0.40
+    // ── Thresholds ────────────────────────────────────────────────────────────
+    private static final double THRESHOLD_ALLOWED    = 0.55;
+    private static final double THRESHOLD_BORDERLINE = 0.35;
 
+    // Field initializer acts as fallback when Spring DI is not running (e.g. in probe)
     @Value("${relevance.api.url:http://localhost:8001/relevance}")
-    private String apiUrl;
-
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .build();
+    private String apiUrl = "http://localhost:8001/relevance";
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -94,8 +49,6 @@ public class RelevanceService {
         String textBlob = content.toCombinedText();
 
         if (textBlob == null || textBlob.isBlank()) {
-            // No content extracted (paywall / CSP / SPA not loaded)
-            // Return a low score → will be BLOCKED by RelevanceController
             LOG.warning("[RELEVANCE-SVC] Empty content for: " + content.getUrl()
                     + " — defaulting to BLOCKED");
             return RelevanceResult.blocked(0.0,
@@ -109,24 +62,44 @@ public class RelevanceService {
             String body = objectMapper.writeValueAsString(
                     new RelevanceRequest(topic, textBlob));
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .timeout(Duration.ofSeconds(10))
-                    .build();
+            System.out.println("[DEBUG] Sending JSON: " + body);
 
-            HttpResponse<String> response =
-                    httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            // ── HTTP call via HttpURLConnection ───────────────────────────────
+            URL url = new URL(apiUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
 
-            if (response.statusCode() != 200) {
-                LOG.warning("[RELEVANCE-SVC] Python API returned HTTP "
-                        + response.statusCode() + " for " + content.getUrl());
-                return fallbackResult("Python API HTTP " + response.statusCode());
+            // Write body
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+                os.flush();
             }
 
-            JsonNode json  = objectMapper.readTree(response.body());
-            double score   = json.get("score").asDouble();
+            int status = conn.getResponseCode();
+            System.out.println("[DEBUG] HTTP status: " + status);
+
+            // ── Error response ────────────────────────────────────────────────
+            if (status != 200) {
+                String errorBody = new String(
+                        conn.getErrorStream().readAllBytes(),
+                        StandardCharsets.UTF_8);
+                LOG.warning("[RELEVANCE-SVC] Python API returned HTTP "
+                        + status + " for " + content.getUrl());
+                LOG.warning("[RELEVANCE-SVC] Response body: " + errorBody);
+                return fallbackResult("Python API HTTP " + status);
+            }
+
+            // ── Success response ──────────────────────────────────────────────
+            String responseBody = new String(
+                    conn.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8);
+
+            JsonNode json = objectMapper.readTree(responseBody);
+            double score  = json.get("score").asDouble();
 
             LOG.info(String.format("[RELEVANCE-SVC] score=%.4f for url=%s",
                     score, content.getUrl()));
@@ -134,7 +107,7 @@ public class RelevanceService {
             return classify(score,
                     String.format("Semantic similarity score: %.4f", score));
 
-        } catch (java.net.ConnectException | java.net.http.HttpConnectTimeoutException e) {
+        } catch (java.net.ConnectException e) {
             LOG.severe("[RELEVANCE-SVC] Python service unreachable at " + apiUrl
                     + " — blocking by default. Start: uvicorn relevance_api:app --port 8001");
             return fallbackResult("Python relevance service unreachable.");
@@ -155,11 +128,7 @@ public class RelevanceService {
 
     /**
      * Fallback when Python is unreachable.
-     *
-     * FIX: Returns score=0.0 (BLOCKED) instead of the old BORDERLINE(0.5).
-     * With the old code, a dead Python service let ALL pages through because
-     * BORDERLINE(0.5) > old block threshold(0.40) and isBlocked()=false.
-     * Now: score 0.0 → BLOCKED immediately, no ambiguity.
+     * Returns BLOCKED so a dead Python service doesn't let all pages through.
      */
     private RelevanceResult fallbackResult(String reason) {
         return RelevanceResult.blocked(0.0,
@@ -168,10 +137,14 @@ public class RelevanceService {
 
     // ── Inner DTO ─────────────────────────────────────────────────────────────
 
-    @SuppressWarnings("unused")
     private static class RelevanceRequest {
+
+        @JsonProperty("topic")
         public final String topic;
+
+        @JsonProperty("content")
         public final String content;
+
         RelevanceRequest(String topic, String content) {
             this.topic   = topic;
             this.content = content;
