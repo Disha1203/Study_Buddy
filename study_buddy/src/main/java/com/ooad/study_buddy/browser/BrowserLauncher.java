@@ -14,35 +14,36 @@ import com.ooad.study_buddy.service.TopicValidationService;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
 /**
  * GRASP Controller: Owns the Stage and orchestrates scene transitions.
  *
- * This replaces the original BrowserLauncher with AI relevance support.
- * The HomepageView is UNCHANGED — we just wire new services in launchSession().
- *
- * NOTE: In a Spring Boot + JavaFX setup you would inject these via
- *       ApplicationContext.getBean(). Here they are constructed manually
- *       because JavaFX Application.launch() does not go through Spring DI.
- *       Wire with Spring if using SpringApplication + JavaFX integration lib.
+ * KEY FIXES vs original:
+ *  1. BrowserController now receives BlockingService (needed for two-phase check).
+ *  2. browserController.clearCache() is called on every new session so
+ *     results from a previous session never leak into the next one.
+ *  3. TopicValidationService is used before FocusSession is created —
+ *     invalid topics are rejected with an error in HomepageView.
+ *     (HomepageView.handleStart already calls the validator; kept here for
+ *      belt-and-suspenders documentation clarity only.)
  */
+
 public class BrowserLauncher extends Application {
 
     private Stage primaryStage;
 
-    // ── Manually constructed service graph ───────────────────────────────────
-    // (Replace with @Autowired / ApplicationContext if using Spring JavaFX boot)
-    private final SessionController    sessionController    = new SessionController();
+    // ── Service graph (manually constructed — replace with Spring DI if integrated) ──
+    private final SessionController      sessionController  = new SessionController();
     private final TopicValidationService validationService  = new TopicValidationService();
 
-    // These would normally be Spring beans:
-    private BlockingService         blockingService;
-    private RelevanceService        relevanceService;
+    private BlockingService          blockingService;
+    private RelevanceService         relevanceService;
     private ContentExtractionService extractor;
-    private RelevanceChainFactory   chainFactory;
-    private RelevanceController     relevanceController;
-    private BrowserController       browserController;
+    private RelevanceChainFactory    chainFactory;
+    private RelevanceController      relevanceController;
+    private BrowserController        browserController;
 
     @Override
     public void start(Stage stage) {
@@ -56,17 +57,17 @@ public class BrowserLauncher extends Application {
     // ── Service wiring ────────────────────────────────────────────────────────
 
     private void initServices() {
-        // In a real Spring Boot app, replace this block with @Autowired fields
-        // and remove the manual construction entirely.
-        // For now, we instantiate with a no-op repository (swap for Spring bean).
         blockingService     = new BlockingService(new InMemorySiteMetadataRepository());
         relevanceService    = new RelevanceService();
         extractor           = new ContentExtractionService();
         chainFactory        = new RelevanceChainFactory(blockingService, relevanceService);
         relevanceController = new RelevanceController(chainFactory, blockingService);
-        browserController   = new BrowserController(extractor, relevanceController);
 
-        // Pre-seed some whitelisted academic domains
+        // FIX: pass blockingService so BrowserController can run quickDecision
+        //      in both the locationListener and the stateListener.
+        browserController = new BrowserController(extractor, relevanceController, blockingService);
+
+        // Pre-seed academic whitelist
         blockingService.whitelist("scholar.google.com",   "Google Scholar");
         blockingService.whitelist("arxiv.org",             "arXiv preprints");
         blockingService.whitelist("wikipedia.org",         "Wikipedia");
@@ -74,6 +75,9 @@ public class BrowserLauncher extends Application {
         blockingService.whitelist("docs.oracle.com",       "Java docs");
         blockingService.whitelist("docs.spring.io",        "Spring docs");
         blockingService.whitelist("developer.mozilla.org", "MDN Web Docs");
+        blockingService.whitelist("github.com",            "GitHub");
+        blockingService.whitelist("pubmed.ncbi.nlm.nih.gov", "PubMed");
+        blockingService.whitelist("jstor.org",             "JSTOR");
     }
 
     // ── Homepage ──────────────────────────────────────────────────────────────
@@ -82,8 +86,8 @@ public class BrowserLauncher extends Application {
         sessionController.stopSession();
 
         HomepageView homepage = new HomepageView(sessionController, this::launchSession);
-        javafx.scene.Scene scene = new javafx.scene.Scene(homepage.getView(), 1000, 600);
-        scene.setFill(javafx.scene.paint.Color.web("#0f0f0f"));
+        Scene scene = new Scene(homepage.getView(), 1000, 600);
+        scene.setFill(Color.web("#0f0f0f"));
         primaryStage.setScene(scene);
         primaryStage.setTitle("Study Buddy");
     }
@@ -91,16 +95,16 @@ public class BrowserLauncher extends Application {
     // ── Session launch ────────────────────────────────────────────────────────
 
     private void launchSession(FocusSession session) {
+        // Clear stale results from any previous session
+        browserController.clearCache();
 
         TimerOverlay overlay = new TimerOverlay(
                 session.getTopic(),
                 session.getTotalDurationMinutes());
-
         overlay.setOnSessionEndCallback(() -> Platform.runLater(this::showHomepage));
 
         sessionController.startSession(session, overlay);
 
-        // Build the AI-enabled browser view
         AiBrowserView browser = new AiBrowserView();
         javafx.scene.layout.BorderPane view = browser.getView(
                 overlay,
@@ -111,7 +115,7 @@ public class BrowserLauncher extends Application {
         primaryStage.setScene(scene);
         primaryStage.setTitle("Study Buddy — " + session.getTopic());
 
-        // Load a sensible default start page
+        // Default start page — Google (will be relevance-checked)
         browser.loadUrl("https://www.google.com");
     }
 

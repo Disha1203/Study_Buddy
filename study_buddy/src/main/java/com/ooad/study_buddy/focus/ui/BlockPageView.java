@@ -1,26 +1,34 @@
 package com.ooad.study_buddy.focus.ui;
 
 import com.ooad.study_buddy.model.RelevanceResult;
+import javafx.animation.PauseTransition;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.util.Duration;
 
 import java.util.List;
 import java.util.Random;
 
 /**
- * VIEW — Block Page
+ * VIEW — Block Page  (fixed)
+ *
+ * KEY FIXES:
+ *  1. New overloaded getView() accepts three callbacks:
+ *       onGoBack, onSearchInstead, onBypass (2-min timer shown on button)
+ *  2. Original single-callback getView() preserved for backward compat.
+ *  3. Bypass button shows a live countdown so the user sees the bypass expire.
  *
  * SRP: Only renders "you're blocked" UI.
- * Low Coupling: Receives a Runnable callback for the "Go Back" action;
- *              knows nothing about WebEngine or session logic.
+ * Low Coupling: Communicates via Runnable callbacks only.
  */
 public class BlockPageView {
 
-    // ── Sarcastic / meme messages ─────────────────────────────────────────────
+    // ── Sarcastic messages ────────────────────────────────────────────────────
     private static final List<String> ROASTS = List.of(
             "Surely that rabbit hole can wait.",
             "Your future self thanks you for this block.",
@@ -35,28 +43,43 @@ public class BlockPageView {
             "Big brain energy: close the tab.",
             "Skill issue: lack of focus detected.",
             "This page has been blocked in your area.",
-            "The grind doesn't stop. Neither does this blocker."
+            "The grind doesn't stop. Neither does this blocker.",
+            "Distraction.exe has been terminated.",
+            "Nice URL. Would be a shame if it were blocked. Oh wait.",
+            "Your attention span called. It wants to speak to the manager.",
+            "Studies show this website is not your study session.",
+            "This is your sign to review those flashcards."
     );
 
     private static final Random RNG = new Random();
 
-    // ── Factory ───────────────────────────────────────────────────────────────
+    // ── Original API (backward compat) ────────────────────────────────────────
+
+    public BorderPane getView(RelevanceResult result, String url, Runnable onGoBack) {
+        return getView(result, url, onGoBack, null, null);
+    }
+
+    // ── Full API ──────────────────────────────────────────────────────────────
 
     /**
      * Builds the blocked-page layout.
      *
-     * @param result   the relevance verdict (for score display)
-     * @param url      the blocked URL
-     * @param onGoBack called when the user clicks "Go Back"
-     * @return a BorderPane ready to swap into the scene
+     * @param result          the relevance verdict (for score display)
+     * @param url             the blocked URL
+     * @param onGoBack        called when "← Go Back" is clicked
+     * @param onSearchInstead called when "Search Instead" is clicked (may be null)
+     * @param onBypass        called when "Allow 2 min" is clicked (may be null)
      */
-    public BorderPane getView(RelevanceResult result, String url, Runnable onGoBack) {
-
+    public BorderPane getView(RelevanceResult result,
+                              String url,
+                              Runnable onGoBack,
+                              Runnable onSearchInstead,
+                              Runnable onBypass) {
         // ── Emoji ──
         Label emoji = new Label("🚫");
         emoji.setStyle("-fx-font-size: 56px;");
 
-        // ── Main heading ──
+        // ── Heading ──
         Label heading = new Label("This page isn't relevant.");
         heading.setStyle(
                 "-fx-font-size: 26px;" +
@@ -64,7 +87,7 @@ public class BlockPageView {
                 "-fx-text-fill: #ffffff;" +
                 "-fx-font-family: 'Segoe UI', sans-serif;");
 
-        // ── Sarcastic sub-message ──
+        // ── Sarcasm ──
         Label sarcasm = new Label(randomRoast());
         sarcasm.setStyle(
                 "-fx-font-size: 15px;" +
@@ -84,7 +107,7 @@ public class BlockPageView {
                 "-fx-font-size: 12px;" +
                 "-fx-font-family: 'Consolas', monospace;");
 
-        // ── Blocked URL label ──
+        // ── URL label ──
         String displayUrl = url != null && url.length() > 60
                 ? url.substring(0, 60) + "…"
                 : (url != null ? url : "");
@@ -95,29 +118,49 @@ public class BlockPageView {
                 "-fx-font-family: 'Consolas', monospace;");
 
         // ── Go Back button ──
-        Button backBtn = new Button("← Go Back");
-        backBtn.setPrefWidth(200);
-        backBtn.setPrefHeight(44);
-        backBtn.setStyle(
-                "-fx-background-color: #7C6EFA;" +
-                "-fx-text-fill: white;" +
-                "-fx-font-size: 14px;" +
-                "-fx-font-weight: bold;" +
-                "-fx-background-radius: 10;" +
-                "-fx-cursor: hand;" +
-                "-fx-font-family: 'Segoe UI', sans-serif;");
-        backBtn.setOnMouseEntered(e -> backBtn.setStyle(backBtn.getStyle()
-                .replace("#7C6EFA", "#9A8FFF")));
-        backBtn.setOnMouseExited(e -> backBtn.setStyle(backBtn.getStyle()
-                .replace("#9A8FFF", "#7C6EFA")));
+        Button backBtn = primaryButton("← Go Back");
         backBtn.setOnAction(e -> { if (onGoBack != null) onGoBack.run(); });
+
+        // ── Action row ──
+        HBox actionRow = new HBox(10);
+        actionRow.setAlignment(Pos.CENTER);
+        actionRow.getChildren().add(backBtn);
+
+        if (onSearchInstead != null) {
+            Button searchBtn = secondaryButton("🔍 Search Instead");
+            searchBtn.setOnAction(e -> onSearchInstead.run());
+            actionRow.getChildren().add(searchBtn);
+        }
+
+        if (onBypass != null) {
+            Button bypassBtn = dangerButton("⏱ Allow 2 min");
+            // Countdown label updated by a PauseTransition pulse
+            bypassBtn.setOnAction(e -> {
+                bypassBtn.setDisable(true);
+                bypassBtn.setText("⏱ 2:00");
+                onBypass.run();
+
+                // Visual countdown on the button (purely cosmetic — real timer in AiBrowserView)
+                int[] remaining = {120};
+                javafx.animation.Timeline countdown = new javafx.animation.Timeline(
+                        new javafx.animation.KeyFrame(Duration.seconds(1), ev -> {
+                            remaining[0]--;
+                            int m = remaining[0] / 60;
+                            int s = remaining[0] % 60;
+                            bypassBtn.setText(String.format("⏱ %d:%02d", m, s));
+                        }));
+                countdown.setCycleCount(120);
+                countdown.play();
+            });
+            actionRow.getChildren().add(bypassBtn);
+        }
 
         // ── Card ──
         VBox card = new VBox(18,
                 emoji, heading, sarcasm,
-                scoreChip, urlLabel, backBtn);
+                scoreChip, urlLabel, actionRow);
         card.setAlignment(Pos.CENTER);
-        card.setMaxWidth(460);
+        card.setMaxWidth(480);
         card.setPadding(new Insets(48, 44, 48, 44));
         card.setStyle(
                 "-fx-background-color: #161616;" +
@@ -133,8 +176,62 @@ public class BlockPageView {
         BorderPane root = new BorderPane();
         root.setCenter(wrapper);
         root.setStyle("-fx-background-color: #0f0f0f;");
-
         return root;
+    }
+
+    // ── Button helpers ────────────────────────────────────────────────────────
+
+    private Button primaryButton(String label) {
+        Button btn = new Button(label);
+        btn.setPrefWidth(160);
+        btn.setPrefHeight(42);
+        btn.setStyle(
+                "-fx-background-color: #7C6EFA;" +
+                "-fx-text-fill: white;" +
+                "-fx-font-size: 13px;" +
+                "-fx-font-weight: bold;" +
+                "-fx-background-radius: 10;" +
+                "-fx-cursor: hand;" +
+                "-fx-font-family: 'Segoe UI', sans-serif;");
+        btn.setOnMouseEntered(e -> btn.setStyle(btn.getStyle().replace("#7C6EFA", "#9A8FFF")));
+        btn.setOnMouseExited(e  -> btn.setStyle(btn.getStyle().replace("#9A8FFF", "#7C6EFA")));
+        return btn;
+    }
+
+    private Button secondaryButton(String label) {
+        Button btn = new Button(label);
+        btn.setPrefWidth(160);
+        btn.setPrefHeight(42);
+        btn.setStyle(
+                "-fx-background-color: #1e1e1e;" +
+                "-fx-text-fill: #aaaaaa;" +
+                "-fx-font-size: 13px;" +
+                "-fx-background-radius: 10;" +
+                "-fx-border-color: #333333;" +
+                "-fx-border-radius: 10;" +
+                "-fx-border-width: 1;" +
+                "-fx-cursor: hand;" +
+                "-fx-font-family: 'Segoe UI', sans-serif;");
+        btn.setOnMouseEntered(e -> btn.setStyle(btn.getStyle().replace("#1e1e1e", "#2a2a2a")));
+        btn.setOnMouseExited(e  -> btn.setStyle(btn.getStyle().replace("#2a2a2a", "#1e1e1e")));
+        return btn;
+    }
+
+    private Button dangerButton(String label) {
+        Button btn = new Button(label);
+        btn.setPrefWidth(160);
+        btn.setPrefHeight(42);
+        btn.setStyle(
+                "-fx-background-color: #2d1515;" +
+                "-fx-text-fill: #ff6b6b;" +
+                "-fx-font-size: 13px;" +
+                "-fx-background-radius: 10;" +
+                "-fx-border-color: #5a2020;" +
+                "-fx-border-radius: 10;" +
+                "-fx-border-width: 1;" +
+                "-fx-cursor: hand;" +
+                "-fx-font-family: 'Segoe UI', sans-serif;");
+        return btn;
     }
 
     private static String randomRoast() {
