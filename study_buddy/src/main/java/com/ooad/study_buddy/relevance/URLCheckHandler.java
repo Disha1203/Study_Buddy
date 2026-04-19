@@ -7,26 +7,34 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
+
 /**
- * Chain link 3 — Phase 1: fast URL-keyword check.
+ * Chain link — Phase 1: URL-based quick check
  *
- * Looks for obvious distraction domains/paths without any API call.
- * OCP: extend DISTRACTION_KEYWORDS without touching other handlers.
+ * Logic:
+ * 1. BLOCK if URL contains distraction keywords
+ * 2. ALLOW if full topic is present in URL (word-safe match)
+ * 3. Otherwise PASS to next handler
+ *
+ * SRP: Only performs fast URL-based filtering
+ * OCP: Extend DISTRACTION_KEYWORDS without modifying logic
  */
 public class URLCheckHandler extends AbstractRelevanceHandler {
 
     private static final List<String> DISTRACTION_KEYWORDS = Arrays.asList(
-            "instagram", "facebook", "twitter", "x.com", "tiktok",
+            "instagram", "facebook", "twitter", "tiktok",
             "snapchat", "twitch", "netflix", "hulu", "primevideo",
             "disneyplus", "9gag", "buzzfeed", "dailymotion",
             "pornhub", "onlyfans", "casino", "bet365", "gambling",
-            "meme", "funny", "lol", "wtf", "4chan", "imgur"
+            "meme", "funny", "4chan", "imgur"
     );
 
     @Override
     public RelevanceResult handle(String topic, ContentData content) {
+
         String url = content.getUrl() == null ? "" : content.getUrl().toLowerCase(Locale.ROOT);
 
+        // ── 1. BLOCK distractions ─────────────────────────────────────────────
         for (String keyword : DISTRACTION_KEYWORDS) {
             if (url.contains(keyword)) {
                 return RelevanceResult.blocked(0.0,
@@ -34,16 +42,48 @@ public class URLCheckHandler extends AbstractRelevanceHandler {
             }
         }
 
-        // Check if any topic words appear in the URL — boosts confidence
-        String[] topicWords = topic.toLowerCase(Locale.ROOT).split("\\s+");
-        for (String word : topicWords) {
-            if (word.length() >= 4 && url.contains(word)) {
-                // Topic keyword in URL is a strong relevance signal — skip deep check
-                return RelevanceResult.allowed(0.8,
-                        "Topic keyword '" + word + "' found in URL.");
-            }
+        // ── Normalize inputs ──────────────────────────────────────────────────
+        String cleanUrl = url.replaceAll("[^a-z0-9]", " ");
+        String cleanTopic = topic.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]", " ")
+                .trim();
+
+        // ── 2. ALLOW if full topic matches (safe word matching) ───────────────
+        if (!cleanTopic.isBlank() && fullTopicMatch(cleanUrl, cleanTopic)) {
+            return RelevanceResult.allowed(0.9,
+                    "All topic keywords found in URL.");
         }
 
+        // ── 3. PASS to next handler ───────────────────────────────────────────
         return passToNext(topic, content);
+    }
+
+    /**
+     * Ensures ALL meaningful topic words exist in the URL as whole words.
+     * Prevents false matches like:
+     *  - "java" matching "javascript"
+     *  - "net" matching "internet"
+     */
+    private boolean fullTopicMatch(String cleanUrl, String cleanTopic) {
+
+        String[] topicWords = cleanTopic.split("\\s+");
+
+        boolean matchedAtLeastOne = false;
+
+        for (String word : topicWords) {
+
+            // Ignore very short words (avoid noise like "ai", "of")
+            if (word.length() < 3) continue;
+
+            // Strict word boundary match
+            if (!cleanUrl.matches(".*\\b" + word + "\\b.*")) {
+                return false;
+            }
+
+            matchedAtLeastOne = true;
+        }
+
+        // Ensure at least one meaningful word matched
+        return matchedAtLeastOne;
     }
 }
