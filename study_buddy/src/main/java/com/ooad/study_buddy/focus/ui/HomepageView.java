@@ -6,6 +6,7 @@ import com.ooad.study_buddy.focus.model.FocusSession;
 import com.ooad.study_buddy.focus.strategy.Extended5010Strategy;
 import com.ooad.study_buddy.focus.strategy.PomodoroStrategy;
 import com.ooad.study_buddy.focus.strategy.Standard2505Strategy;
+import com.ooad.study_buddy.focus.strategy.Dev1010Strategy;
 import com.ooad.study_buddy.model.SiteMetadata;
 import com.ooad.study_buddy.model.Topic;
 import com.ooad.study_buddy.service.BlockingService;
@@ -16,6 +17,7 @@ import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.scene.text.TextAlignment;
+
 
 import java.util.function.Consumer;
 
@@ -46,7 +48,8 @@ public class HomepageView {
 
     private static final PomodoroStrategy[] STRATEGIES = {
             new Standard2505Strategy(),
-            new Extended5010Strategy()
+            new Extended5010Strategy(),
+            new Dev1010Strategy()
     };
 
     // ── Constructors ──────────────────────────────────────────────────────────
@@ -189,12 +192,12 @@ public class HomepageView {
                 durationLabel, durationField,
                 modeLabel, modeRow,
                 errorLabel);
-        form.setMaxWidth(380);
+        form.setMaxWidth(520);
 
         VBox card = new VBox(28, headerBox, form, startBtn);
         card.setAlignment(Pos.CENTER);
-        card.setMaxWidth(440);
-        card.setMinWidth(380);
+        card.setMaxWidth(650);
+        card.setMinWidth(550);
         card.setPadding(new Insets(48, 44, 48, 44));
         card.setStyle(
                 "-fx-background-color: #161616;" +
