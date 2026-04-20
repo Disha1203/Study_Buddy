@@ -30,25 +30,81 @@ public class BlockPageView {
 
     // ── Sarcastic messages ────────────────────────────────────────────────────
     private static final List<String> ROASTS = List.of(
-            "Surely that rabbit hole can wait.",
-            "Your future self thanks you for this block.",
-            "Not all who wander are studying.",
-            "That website won't be on the exam.",
-            "Get back to work, champ.",
-            "The internet will still be here after your session.",
-            "Nice try. Zero points for creativity.",
-            "404: Distraction not found... actually, it was found and blocked.",
-            "Your study topic called. It misses you.",
-            "Eyes on the prize. The prize is not this URL.",
-            "Big brain energy: close the tab.",
-            "Skill issue: lack of focus detected.",
-            "This page has been blocked in your area.",
-            "The grind doesn't stop. Neither does this blocker.",
-            "Distraction.exe has been terminated.",
-            "Nice URL. Would be a shame if it were blocked. Oh wait.",
-            "Your attention span called. It wants to speak to the manager.",
-            "Studies show this website is not your study session.",
-            "This is your sign to review those flashcards."
+            
+    "😬 Be honest… this wasn’t part of your plan today.",
+    "🤨 We both know you’ve got work to do.",
+    "😑 Are you serious right now?",
+    "🫠 This is your productivity era?",
+    "😌 Ah yes, peak efficiency.",
+    "🙃 This is why deadlines fear you… oh wait.",
+    "😅 You opened this with confidence too… interesting.",
+    "💀 I expected nothing and I’m still disappointed.",
+    "📌 We had goals. Remember those?",
+
+    // 😭 Mild Roast
+    "😒 It’s like you’re not even trying.",
+    "📉 This is not the academic comeback you promised.",
+    "😔 Your future self just sighed.",
+    "🤔 Do you need help or just vibes?",
+    "😶 Bold of you to call this ‘studying’.",
+    "🧍 You had one job.",
+    "🤖 You’re testing my patience and I’m just code.",
+    "📡 Even your WiFi is judging you.",
+    "🚫 Let’s not pretend this is productive.",
+
+    "📸 Caught in 4K.",
+    "💀 This wasn’t on the syllabus.",
+    "🤖 NPC behavior detected.",
+    "🎬 Main character would NOT do this.",
+    "🧭 Side quest detected.",
+    "🔄 Character development… but backwards.",
+    "🎮 Mission failed successfully.",
+
+    // 📚 Study Mode
+    "📚 Your syllabus just cried.",
+    "📝 That assignment isn’t going to finish itself.",
+    "👀 Exams are watching.",
+    "❌ This will not be in the question paper btw.",
+    "⏳ Time spent here = marks lost there.",
+    "📖 You could’ve finished 2 chapters by now.",
+    "💬 Productivity left the chat.",
+    "🎯 Focus mode? Never heard of her.",
+
+    // 😌 Passive Aggressive
+    "🙂 Maybe we can revisit this later?",
+    "🤓 Are you sure this aligns with your goals?",
+    "🧐 Just checking… is this important?",
+    "⚠️ You might want to reconsider.",
+    "🔁 Let’s redirect our energy perhaps?",
+    "😇 I trust you know what you’re doing. (Do you?)",
+    "🤨 Interesting choice.",
+    "🙈 I’ll pretend I didn’t see that.",
+    "😬 No judgment… but also, a little judgment.",
+
+    // 💀 Extra Savage
+    "💀 This is why we can’t have nice things.",
+    "🪞 You are your own biggest distraction.",
+    "🤖 Even autocorrect gave up on you.",
+    "🔁 At this point, it’s a lifestyle.",
+    "📉 Consistency… but in the wrong direction.",
+    "⚡ You’re speedrunning procrastination.",
+    "🚪 Your discipline just logged out.",
+    "🪦 Motivation found dead.",
+    "⚔️ You vs focus: focus is winning.",
+
+    "👹 Boss level (exam) approaching… and you’re here??",
+    "🐇🕳️ Surely that rabbit hole can wait.",
+    "🙏 Your future self thanks you for this block.",
+    "😏 Nice try. Zero points for creativity.",
+    "🚫 404: Distraction not found... actually, it was found and blocked.",
+    "📞 Your study topic called. It misses you.",
+    "🧠 Big brain energy: close the tab.",
+    "⚠️ Skill issue: lack of focus detected.",
+    "💪 The grind doesn't stop. Neither does this blocker.",
+    "🛑 Distraction.exe has been terminated.",
+    "😈 Nice URL. Would be a shame if it were blocked. Oh wait.",
+    "📱 Your attention span called. It wants to speak to the manager.",
+    "📊 Studies show this website is not your study session."
     );
 
     private static final Random RNG = new Random();

@@ -1,5 +1,6 @@
 package com.ooad.study_buddy.focus.ui;
 
+// import com.apple.laf.AquaButtonBorder.Toggle;
 import com.ooad.study_buddy.focus.controller.SessionController;
 import com.ooad.study_buddy.focus.model.FocusSession;
 import com.ooad.study_buddy.focus.strategy.Extended5010Strategy;
@@ -17,6 +18,8 @@ import javafx.scene.layout.*;
 import javafx.scene.text.TextAlignment;
 
 import java.util.function.Consumer;
+
+// import javax.swing.text.html.ListView;
 
 /**
  * VIEW — Homepage / Session Setup
@@ -79,26 +82,39 @@ public class HomepageView {
         root.setStyle("-fx-background-color: #0f0f0f;");
 
         if (blockingService != null) {
-            // Side-by-side: session card (center) + rules panel (right)
-            VBox sessionCard   = buildCenterCard();
-            VBox rulesPanel    = buildRulesPanel();
+
+            VBox sessionCard = buildCenterCard();
+            VBox rulesPanel  = buildRulesPanel();
+
+            // Initially hidden
+            rulesPanel.setVisible(false);
+            rulesPanel.setManaged(false);
+
+            // Toggle button
+            ToggleButton toggleRulesBtn = new ToggleButton("⚙ Focus Controls");
+            toggleRulesBtn.setStyle(unselectedStyle());
+
+            toggleRulesBtn.selectedProperty().addListener((obs, was, isSelected) -> {
+                rulesPanel.setVisible(isSelected);
+                rulesPanel.setManaged(isSelected);
+
+                toggleRulesBtn.setStyle(isSelected ? selectedStyle() : unselectedStyle());
+            });
 
             HBox contentRow = new HBox(20, sessionCard, rulesPanel);
             contentRow.setAlignment(Pos.CENTER);
             contentRow.setPadding(new Insets(32));
 
-            // Make rules panel grow to fill remaining horizontal space
             HBox.setHgrow(rulesPanel, Priority.ALWAYS);
 
-            ScrollPane scroll = new ScrollPane(contentRow);
+            VBox container = new VBox(10, toggleRulesBtn, contentRow);
+            container.setAlignment(Pos.TOP_CENTER);
+
+            ScrollPane scroll = new ScrollPane(container);
             scroll.setFitToWidth(true);
             scroll.setStyle("-fx-background: #0f0f0f; -fx-background-color: #0f0f0f;");
 
             root.setCenter(scroll);
-        } else {
-            VBox center = buildCenterCard();
-            root.setCenter(center);
-            BorderPane.setAlignment(center, Pos.CENTER);
         }
 
         return root;
@@ -467,7 +483,7 @@ public class HomepageView {
             return;
         }
 
-        Toggle selected = modeGroup.getSelectedToggle();
+        ToggleButton selected = (ToggleButton) modeGroup.getSelectedToggle();
         if (selected == null) {
             errorLabel.setText("⚠ Please select a Pomodoro mode.");
             return;
