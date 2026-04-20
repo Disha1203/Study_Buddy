@@ -12,18 +12,14 @@ import com.ooad.study_buddy.service.ContentExtractionService;
 import com.ooad.study_buddy.service.DatabaseSeedService;
 import com.ooad.study_buddy.service.RelevanceService;
 import com.ooad.study_buddy.service.TopicValidationService;
+import com.ooad.study_buddy.service.SessionTrackingService; // ✅ ADD
+
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
-/**
- * GRASP Controller: Owns the Stage and orchestrates scene transitions.
- *
- * UPDATED: passes blockingService to HomepageView so the rules manager
- * panel is wired and persists changes to MySQL.
- */
 public class BrowserLauncher extends Application {
 
     private Stage primaryStage;
@@ -38,6 +34,9 @@ public class BrowserLauncher extends Application {
     private RelevanceController      relevanceController;
     private BrowserController        browserController;
 
+    // ✅ ADD FIELD
+    private SessionTrackingService sessionTrackingService;
+
     @Override
     public void start(Stage stage) {
         this.primaryStage = stage;
@@ -50,34 +49,44 @@ public class BrowserLauncher extends Application {
     // ── Service wiring ────────────────────────────────────────────────────────
 
     private void initServices() {
-        // 1. In-memory repo
         InMemorySiteMetadataRepository inMemoryRepo =
                 new InMemorySiteMetadataRepository();
 
-        // 2. Load whitelist/blacklist from MySQL into in-memory repo
         DatabaseSeedService seeder = new DatabaseSeedService(inMemoryRepo);
         seeder.loadFromDatabase();
 
-        // 3. Wire services
         blockingService     = new BlockingService(inMemoryRepo);
         relevanceService    = new RelevanceService();
         extractor           = new ContentExtractionService();
         chainFactory        = new RelevanceChainFactory(blockingService, relevanceService);
         relevanceController = new RelevanceController(chainFactory, blockingService);
-        browserController   = new BrowserController(extractor, relevanceController, blockingService);
+
+        // ✅ ADD: tracking service
+        sessionTrackingService = new SessionTrackingService();
+
+        // ✅ MODIFY: pass tracking service
+        browserController = new BrowserController(
+                extractor,
+                relevanceController,
+                blockingService,
+                sessionTrackingService   // ✅ NEW ARG
+        );
     }
 
     // ── Homepage ──────────────────────────────────────────────────────────────
 
     private void showHomepage() {
+        // ✅ ADD: guard-close session
+        sessionTrackingService.closeSession();
+
         sessionController.stopSession();
 
-        // Pass blockingService so the rules panel is wired
         HomepageView homepage = new HomepageView(
                 sessionController,
                 this::launchSession,
                 validationService,
-                blockingService);   // ← NEW
+                blockingService
+        );
 
         Scene scene = new Scene(homepage.getView(), 1200, 680);
         scene.setFill(Color.web("#0f0f0f"));
@@ -88,10 +97,24 @@ public class BrowserLauncher extends Application {
     // ── Session launch ────────────────────────────────────────────────────────
 
     private void launchSession(FocusSession session) {
+
+        // ✅ ADD: open session BEFORE anything
+        sessionTrackingService.openSession(
+                session.getTopic(),
+                session.getStrategy().getLabel(),
+                session.getTotalDurationMinutes()
+        );
+
         TimerOverlay overlay = new TimerOverlay(
                 session.getTopic(),
-                session.getTotalDurationMinutes());
-        overlay.setOnSessionEndCallback(() -> Platform.runLater(this::showHomepage));
+                session.getTotalDurationMinutes()
+        );
+
+        // ✅ MODIFY: close session on timer end
+        overlay.setOnSessionEndCallback(() -> Platform.runLater(() -> {
+            sessionTrackingService.closeSession(); // ✅ ADD
+            showHomepage();
+        }));
 
         sessionController.startSession(session, overlay);
 
@@ -99,7 +122,8 @@ public class BrowserLauncher extends Application {
         javafx.scene.layout.BorderPane view = browser.getView(
                 overlay,
                 browserController,
-                session.getTopic());
+                session.getTopic()
+        );
 
         Scene scene = new Scene(view, 1200, 680);
         primaryStage.setScene(scene);

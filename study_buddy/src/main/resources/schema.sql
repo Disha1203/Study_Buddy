@@ -55,3 +55,25 @@ INSERT IGNORE INTO blocking_rules (domain, rule_type, notes) VALUES
 ('amazon.com',           'BLACKLIST', 'Shopping'),
 ('flipkart.com',         'BLACKLIST', 'Shopping'),
 ('ebay.com',             'BLACKLIST', 'Shopping');
+
+-- ── Session tracking ───────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS study_sessions (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    topic        VARCHAR(255) NOT NULL,
+    strategy     VARCHAR(50)  NOT NULL,
+    started_at   DATETIME     NOT NULL,
+    ended_at     DATETIME,
+    duration_minutes INT      NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_events (
+    id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+    session_id   BIGINT       NOT NULL,
+    url          VARCHAR(2048) NOT NULL,
+    verdict      VARCHAR(20)  NOT NULL,   -- ALLOW / BLOCK / CHECK_RELEVANCE
+    score        DOUBLE,                  -- NULL for ALLOW/BLOCK platform decisions
+    reason       VARCHAR(500),
+    occurred_at  DATETIME     NOT NULL,
+    CONSTRAINT fk_session FOREIGN KEY (session_id)
+        REFERENCES study_sessions(id) ON DELETE CASCADE
+);

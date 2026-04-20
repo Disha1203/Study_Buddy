@@ -5,6 +5,7 @@ import com.ooad.study_buddy.model.ContentData;
 import com.ooad.study_buddy.model.RelevanceResult;
 import com.ooad.study_buddy.service.BlockingService;
 import com.ooad.study_buddy.service.ContentExtractionService;
+import com.ooad.study_buddy.service.SessionTrackingService;
 import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.concurrent.Worker;
@@ -48,16 +49,18 @@ public class BrowserController {
     private final ContentExtractionService extractor;
     private final RelevanceController      relevanceController;
     private final BlockingService          blockingService;
+    private final SessionTrackingService sessionTrackingService;
 
     private ChangeListener<String>       locationListener;
     private ChangeListener<Worker.State> stateListener;
 
     public BrowserController(ContentExtractionService extractor,
                              RelevanceController relevanceController,
-                             BlockingService blockingService) {
+                             BlockingService blockingService, SessionTrackingService sessionTrackingService) {
         this.extractor           = extractor;
         this.relevanceController = relevanceController;
         this.blockingService     = blockingService;
+        this.sessionTrackingService = sessionTrackingService;
     }
 
     // ── Focus state wiring ────────────────────────────────────────────────────
@@ -154,12 +157,14 @@ public class BrowserController {
                 RelevanceResult r = RelevanceResult.allowed(1.0, "Allowed by platform rule.");
                 cache.put(newUrl, r);
                 onResult.accept(newUrl, r);
+                sessionTrackingService.logPlatformDecision(newUrl, "ALLOW", "platform rule");
 
             } else if (quick == BlockingService.Decision.BLOCK) {
                 RelevanceResult r = RelevanceResult.blocked(0.0, "Blocked by platform rule.");
                 cache.put(newUrl, r);
                 lastBlockedAt.put(newUrl, System.currentTimeMillis());
                 dispatchBlock(engine, newUrl, r, onResult);
+                sessionTrackingService.logPlatformDecision(newUrl, "BLOCK", "platform rule");
             }
             // CHECK_RELEVANCE → wait for SUCCEEDED (phase 2)
         };
@@ -216,6 +221,7 @@ public class BrowserController {
                     url, result.getVerdict(), result.getScore(), result.getReason()));
 
             cache.put(url, result);
+            sessionTrackingService.logEvent(url, result);
 
             if (result.isBlocked()) {
                 lastBlockedAt.put(url, System.currentTimeMillis());
