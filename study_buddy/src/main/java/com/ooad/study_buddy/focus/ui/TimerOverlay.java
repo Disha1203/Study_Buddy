@@ -27,8 +27,8 @@ public class TimerOverlay extends VBox implements TimerObserver {
 
     private Runnable onSessionEndCallback;
 
-    // ── New fields for break-mode blocking ───────────────────────────────────
-    private FocusStateHolder focusStateHolder;
+    // ── Fields for break-mode blocking ───────────────────────────────────────
+    private FocusStateHolder  focusStateHolder;
     private BrowserController browserController;
 
     public TimerOverlay(String topic, int totalSessionMinutes) {
@@ -52,7 +52,7 @@ public class TimerOverlay extends VBox implements TimerObserver {
         getChildren().addAll(topicLabel, modeLabel, timerLabel, sessionLabel);
     }
 
-    // ── Setters for break-mode wiring ────────────────────────────────────────
+    // ── Setters ──────────────────────────────────────────────────────────────
 
     public void setOnSessionEndCallback(Runnable callback) {
         this.onSessionEndCallback = callback;
@@ -66,7 +66,7 @@ public class TimerOverlay extends VBox implements TimerObserver {
         this.browserController = controller;
     }
 
-    // ── TimerObserver ────────────────────────────────────────────────────────
+    // ── TimerObserver ─────────────────────────────────────────────────────────
 
     @Override
     public void onTick(int remainingSeconds) {
@@ -79,15 +79,18 @@ public class TimerOverlay extends VBox implements TimerObserver {
 
     @Override
     public void onModeChange(boolean isFocus) {
-        // Update shared state so BrowserController knows the current mode
+        // ── 1. Update the shared flag so BrowserController sees the change ──
         if (focusStateHolder != null) {
             focusStateHolder.setFocusMode(isFocus);
         }
-        // Clear cached verdicts so a site blocked during focus is immediately
-        // accessible on break, and vice versa
+
+        // ── 2. Clear cached verdicts so sites blocked during focus are
+        //       immediately accessible on break, and vice versa ────────────
         if (browserController != null) {
             browserController.clearCache();
         }
+
+        // ── 3. Update the UI ──────────────────────────────────────────────
         Platform.runLater(() -> {
             String accent = isFocus ? FOCUS_ACCENT : BREAK_ACCENT;
             modeLabel.setText(isFocus ? "FOCUS" : "BREAK");
@@ -97,13 +100,17 @@ public class TimerOverlay extends VBox implements TimerObserver {
 
     @Override
     public void onSessionEnd() {
-        // Mark as not-focus so no blocking lingers after session ends
+        // ── 1. Mark as not-focus so no blocking lingers after session ends ─
         if (focusStateHolder != null) {
             focusStateHolder.setFocusMode(false);
         }
+
+        // ── 2. Clear cache so nothing stale carries over ──────────────────
         if (browserController != null) {
             browserController.clearCache();
         }
+
+        // ── 3. Update UI then fire the session-end callback ───────────────
         Platform.runLater(() -> {
             modeLabel.setText("DONE ✓");
             timerLabel.setText("00:00");
@@ -111,7 +118,8 @@ public class TimerOverlay extends VBox implements TimerObserver {
             applyAccent(DONE_ACCENT);
 
             javafx.animation.PauseTransition pause =
-                    new javafx.animation.PauseTransition(javafx.util.Duration.seconds(2));
+                    new javafx.animation.PauseTransition(
+                            javafx.util.Duration.seconds(2));
             pause.setOnFinished(e -> {
                 if (onSessionEndCallback != null) onSessionEndCallback.run();
             });
@@ -119,7 +127,7 @@ public class TimerOverlay extends VBox implements TimerObserver {
         });
     }
 
-    // ── Style helpers ────────────────────────────────────────────────────────
+    // ── Style helpers ─────────────────────────────────────────────────────────
 
     private void styleLabels() {
         topicLabel.setStyle(
@@ -158,10 +166,11 @@ public class TimerOverlay extends VBox implements TimerObserver {
                 "-fx-border-color: " + hexToRgba(color, 0.5) + ";" +
                 "-fx-border-radius: 14;" +
                 "-fx-border-width: 1.2;" +
-                "-fx-effect: dropshadow(gaussian, " + hexToRgba(color, 0.4) + ", 14, 0.3, 0, 3);";
+                "-fx-effect: dropshadow(gaussian, " +
+                hexToRgba(color, 0.4) + ", 14, 0.3, 0, 3);";
     }
 
-    // ── Utilities ────────────────────────────────────────────────────────────
+    // ── Utilities ─────────────────────────────────────────────────────────────
 
     private String hexToRgba(String hex, double alpha) {
         hex = hex.replace("#", "");
