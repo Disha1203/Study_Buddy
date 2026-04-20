@@ -3,6 +3,7 @@ package com.ooad.study_buddy.browser;
 import com.ooad.study_buddy.controller.BrowserController;
 import com.ooad.study_buddy.controller.RelevanceController;
 import com.ooad.study_buddy.model.LocalSavedLinksStore;   // MERGE ADDITION
+import com.ooad.study_buddy.focus.FocusStateHolder;
 import com.ooad.study_buddy.focus.controller.SessionController;
 import com.ooad.study_buddy.focus.model.FocusSession;
 import com.ooad.study_buddy.focus.ui.HomepageView;
@@ -27,6 +28,7 @@ import javafx.scene.control.ScrollPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
+import main.java.com.ooad.study_buddy.focus.FocusStateHolder;
 
 import java.util.List;
 
@@ -131,6 +133,8 @@ public class BrowserLauncher extends Application {
                 }));
 
         sessionController.startSession(session, overlay);
+        // ── 2. Create shared focus/break state flag
+        FocusStateHolder focusStateHolder = new FocusStateHolder();
 
         AiBrowserView browser = new AiBrowserView();
         javafx.scene.layout.BorderPane view = browser.getView(
