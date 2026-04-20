@@ -1,10 +1,6 @@
 package com.ooad.study_buddy.service;
 
 import com.ooad.study_buddy.model.RelevanceResult;
-import com.ooad.study_buddy.model.SessionEvent;
-import com.ooad.study_buddy.model.StudySession;
-import com.ooad.study_buddy.repository.SessionEventRepository;
-import com.ooad.study_buddy.repository.StudySessionRepository;
 import org.springframework.stereotype.Service;
 
 import java.sql.*;
@@ -14,14 +10,10 @@ import java.util.logging.Logger;
 /**
  * SERVICE — Session Tracking
  *
- * SRP: Only responsible for persisting session lifecycle and navigation events.
- * DIP: Depends only on repositories (abstractions), not on UI or other services.
- * Safe: All DB writes are wrapped in try/catch — failures never crash the app.
- *
- * Integration points (called from BrowserController and BrowserLauncher):
- *   openSession()  — call when user starts a session
- *   closeSession() — call when session timer ends or user goes back
- *   logEvent()     — call after every relevance/blocking decision
+ * FIX: getLastSessionSummary() previously SELECTed without `id` in the column
+ * list but called rs.getLong("id") — causing "Column 'id' not found".
+ * Fixed by using a single LEFT JOIN query that selects all needed columns
+ * explicitly and reads only what it selects.
  */
 @Service
 public class SessionTrackingService {
@@ -29,28 +21,91 @@ public class SessionTrackingService {
     private static final Logger LOG =
             Logger.getLogger(SessionTrackingService.class.getName());
 
-    // ── Direct JDBC (mirrors DatabaseSeedService pattern) ─────────────────────
-    // We use JDBC instead of Spring JPA because BrowserLauncher constructs
-    // services manually outside the Spring ApplicationContext.
     private static final String DB_URL  =
             "jdbc:mysql://localhost:3306/studybuddy" +
             "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";
     private static final String DB_USER = "root";
     private static final String DB_PASS = "123";
 
-    /** The DB-assigned id of the currently open session; null when idle. */
     private volatile Long activeSessionId = null;
 
-    // ── Session lifecycle ─────────────────────────────────────────────────────
+    // ── Summary DTO ───────────────────────────────────────────────────────────
+
+    public record SessionSummaryData(
+            String        topic,
+            String        strategyLabel,
+            int           durationMinutes,
+            LocalDateTime startedAt,
+            LocalDateTime endedAt,
+            int           totalEvents,
+            int           blockedEvents
+    ) {}
 
     /**
-     * Opens a new session row in study_sessions.
-     * Call once when the user clicks "Start Session".
+     * Returns stats for the most recently CLOSED session (ended_at IS NOT NULL).
      *
-     * @param topic           the validated topic string
-     * @param strategyLabel   e.g. "Standard (25 / 5)"
-     * @param durationMinutes total session duration the user requested
+     * FIX: One single LEFT JOIN query — reads only the columns it actually SELECTs.
+     * Works even when session_events is empty (COUNT returns 0 via LEFT JOIN).
+     *
+     * To test manually from MySQL:
+     *   SELECT s.id, s.topic, s.strategy, s.started_at, s.ended_at,
+     *          s.duration_minutes,
+     *          COUNT(e.id) AS total_events,
+     *          SUM(CASE WHEN e.verdict='BLOCKED' THEN 1 ELSE 0 END) AS blocked_events
+     *   FROM study_sessions s
+     *   LEFT JOIN session_events e ON e.session_id = s.id
+     *   WHERE s.ended_at IS NOT NULL
+     *   GROUP BY s.id, s.topic, s.strategy, s.started_at, s.ended_at, s.duration_minutes
+     *   ORDER BY s.id DESC
+     *   LIMIT 1;
      */
+    public SessionSummaryData getLastSessionSummary() {
+        String sql =
+            "SELECT " +
+            "  s.topic, s.strategy, s.started_at, s.ended_at, s.duration_minutes, " +
+            "  COUNT(e.id)                                              AS total_events, " +
+            "  SUM(CASE WHEN e.verdict = 'BLOCKED' THEN 1 ELSE 0 END)  AS blocked_events " +
+            "FROM study_sessions s " +
+            "LEFT JOIN session_events e ON e.session_id = s.id " +
+            "WHERE s.ended_at IS NOT NULL " +
+            "GROUP BY s.topic, s.strategy, s.started_at, s.ended_at, s.duration_minutes, s.id " +
+            "ORDER BY s.id DESC " +
+            "LIMIT 1";
+
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASS);
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+
+            if (!rs.next()) {
+                LOG.info("[TRACKING] getLastSessionSummary: no closed sessions found.");
+                return null;
+            }
+
+            String        topic     = rs.getString("topic");
+            String        strategy  = rs.getString("strategy");
+            int           duration  = rs.getInt("duration_minutes");
+            LocalDateTime startedAt = rs.getTimestamp("started_at") != null
+                    ? rs.getTimestamp("started_at").toLocalDateTime() : null;
+            LocalDateTime endedAt   = rs.getTimestamp("ended_at") != null
+                    ? rs.getTimestamp("ended_at").toLocalDateTime() : null;
+            int           total     = rs.getInt("total_events");
+            int           blocked   = rs.getInt("blocked_events");
+
+            LOG.info(String.format(
+                    "[TRACKING] Summary loaded — topic='%s' duration=%d total=%d blocked=%d",
+                    topic, duration, total, blocked));
+
+            return new SessionSummaryData(
+                    topic, strategy, duration, startedAt, endedAt, total, blocked);
+
+        } catch (SQLException e) {
+            LOG.warning("[TRACKING] getLastSessionSummary failed (non-fatal): " + e.getMessage());
+            return null;
+        }
+    }
+
+    // ── Session lifecycle (UNCHANGED) ─────────────────────────────────────────
+
     public void openSession(String topic, String strategyLabel, int durationMinutes) {
         String sql =
             "INSERT INTO study_sessions (topic, strategy, started_at, duration_minutes) " +
@@ -77,10 +132,6 @@ public class SessionTrackingService {
         }
     }
 
-    /**
-     * Closes the active session by writing ended_at.
-     * Safe to call multiple times (subsequent calls are no-ops).
-     */
     public void closeSession() {
         Long sid = activeSessionId;
         if (sid == null) return;
@@ -101,41 +152,20 @@ public class SessionTrackingService {
         }
     }
 
-    // ── Event logging ─────────────────────────────────────────────────────────
+    // ── Event logging (UNCHANGED) ─────────────────────────────────────────────
 
-    /**
-     * Logs one navigation event (URL + decision) against the active session.
-     * If no session is open, the call is silently ignored.
-     *
-     * @param url    the full URL that was navigated to
-     * @param result the RelevanceResult produced by the pipeline
-     */
     public void logEvent(String url, RelevanceResult result) {
         Long sid = activeSessionId;
-        if (sid == null) return;   // no active session — skip silently
-
-        String verdict = result.getVerdict().name();  // "ALLOWED" | "BLOCKED" | "BORDERLINE"
-        double score   = result.getScore();
-        String reason  = truncate(result.getReason(), 500);
-
-        logEventRaw(sid, url, verdict, score, reason);
+        if (sid == null) return;
+        logEventRaw(sid, url, result.getVerdict().name(),
+                result.getScore(), truncate(result.getReason(), 500));
     }
 
-    /**
-     * Logs a platform-level decision (ALLOW/BLOCK by BlockingService)
-     * where no RelevanceResult exists.
-     *
-     * @param url     the URL
-     * @param verdict "ALLOW" or "BLOCK"
-     * @param reason  short human-readable reason
-     */
     public void logPlatformDecision(String url, String verdict, String reason) {
         Long sid = activeSessionId;
         if (sid == null) return;
         logEventRaw(sid, url, verdict, null, truncate(reason, 500));
     }
-
-    // ── Internals ─────────────────────────────────────────────────────────────
 
     private void logEventRaw(Long sessionId, String url,
                               String verdict, Double score, String reason) {
@@ -155,9 +185,6 @@ public class SessionTrackingService {
             ps.setTimestamp(6, Timestamp.valueOf(LocalDateTime.now()));
             ps.executeUpdate();
 
-            LOG.fine("[TRACKING] Event logged: verdict=" + verdict
-                    + " url=" + url);
-
         } catch (SQLException e) {
             LOG.warning("[TRACKING] logEvent failed (non-fatal): " + e.getMessage());
         }
@@ -168,6 +195,5 @@ public class SessionTrackingService {
         return s.length() <= max ? s : s.substring(0, max);
     }
 
-    /** Exposed for diagnostics / testing. */
     public Long getActiveSessionId() { return activeSessionId; }
 }

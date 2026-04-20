@@ -12,11 +12,25 @@ import javafx.concurrent.Worker;
 import javafx.scene.web.WebEngine;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.logging.Logger;
 
+/**
+ * GRASP Controller — intercepts WebEngine navigation and applies relevance rules.
+ *
+ * CHANGES:
+ *  1. isBlockingDisabled() replaces isBreakTime() so BUFFER mode also
+ *     bypasses blocking (fix for Change 1 / Change 6).
+ *  2. Per-engine navigation history stack tracks the LAST ALLOWED url so
+ *     "Go Back" always has a valid target even on first load (fix for
+ *     Change 2 / Change 3).
+ *  3. Blocked pages are NEVER pushed onto the history stack so Go Back
+ *     returns to the real previous page, not the blocked one.
+ */
 @Component
 public class BrowserController {
 
@@ -43,23 +57,28 @@ public class BrowserController {
     // ── Re-entrance guard ──────────────────────────────────────────────────────
     private volatile boolean isHandling = false;
 
-    // ── Focus/break state ──────────────────────────────────────────────────────
+    // ── Focus/break/buffer state ───────────────────────────────────────────────
     private FocusStateHolder focusStateHolder;
 
     private final ContentExtractionService extractor;
     private final RelevanceController      relevanceController;
     private final BlockingService          blockingService;
-    private final SessionTrackingService sessionTrackingService;
+    private final SessionTrackingService   sessionTrackingService;
 
     private ChangeListener<String>       locationListener;
     private ChangeListener<Worker.State> stateListener;
 
+    // ── Per-engine navigation history (CHANGE 2/3: replaces AiBrowserView's deque) ──
+    // Key: WebEngine identity hash, Value: stack of allowed URLs
+    private final Map<Integer, Deque<String>> engineHistories = new LinkedHashMap<>();
+
     public BrowserController(ContentExtractionService extractor,
                              RelevanceController relevanceController,
-                             BlockingService blockingService, SessionTrackingService sessionTrackingService) {
-        this.extractor           = extractor;
-        this.relevanceController = relevanceController;
-        this.blockingService     = blockingService;
+                             BlockingService blockingService,
+                             SessionTrackingService sessionTrackingService) {
+        this.extractor            = extractor;
+        this.relevanceController  = relevanceController;
+        this.blockingService      = blockingService;
         this.sessionTrackingService = sessionTrackingService;
     }
 
@@ -70,11 +89,38 @@ public class BrowserController {
     }
 
     /**
-     * Returns true when it is currently break time, meaning all blocking
-     * should be skipped and every URL should be allowed through freely.
+     * CHANGE 1/6: Returns true when blocking should be DISABLED.
+     * Covers BREAK mode and BUFFER mode — not just break.
      */
-    private boolean isBreakTime() {
-        return focusStateHolder != null && !focusStateHolder.isFocusMode();
+    private boolean isBlockingDisabled() {
+        return focusStateHolder != null && focusStateHolder.isBlockingDisabled();
+    }
+
+    // ── Navigation history helpers (CHANGE 2/3) ───────────────────────────────
+
+    /** Records a successfully allowed URL into this engine's history stack. */
+    public void pushHistory(WebEngine engine, String url) {
+        if (url == null || url.isBlank() || url.equals("about:blank")) return;
+        engineHistories
+                .computeIfAbsent(System.identityHashCode(engine), k -> new ArrayDeque<>())
+                .push(url);
+    }
+
+    /**
+     * Pops and returns the previous allowed URL for this engine.
+     * Returns null if no history is available.
+     */
+    public String popHistory(WebEngine engine) {
+        Deque<String> stack = engineHistories.get(System.identityHashCode(engine));
+        if (stack == null || stack.isEmpty()) return null;
+        return stack.poll();
+    }
+
+    /** Peeks at the previous URL without removing it. */
+    public String peekHistory(WebEngine engine) {
+        Deque<String> stack = engineHistories.get(System.identityHashCode(engine));
+        if (stack == null || stack.isEmpty()) return null;
+        return stack.peek();
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -98,64 +144,61 @@ public class BrowserController {
         isHandling = false;
 
         // ══════════════════════════════════════════════════════════════════
-        // PHASE 1 — locationProperty listener
-        //   Fires as soon as WebEngine accepts a new URL (BEFORE network).
-        //   Used for INSTANT decisions: whitelist / blacklist / platform rules.
-        //   CHECK_RELEVANCE URLs are NOT decided here — they wait for the DOM.
-        //
-        //   CRITICAL: Never call engine.load(), engine.stop(), or
-        //   getLoadWorker().cancel() directly in this callback.
-        //   Always defer engine mutations via Platform.runLater().
+        // PHASE 1 — locationProperty listener (instant structural decisions)
         // ══════════════════════════════════════════════════════════════════
         locationListener = (obs, oldUrl, newUrl) -> {
 
-            // Guard 1: ignore empty / about:blank / non-http URLs
             if (newUrl == null || newUrl.isBlank()
                     || newUrl.equals("about:blank")
                     || !newUrl.startsWith("http")) {
                 return;
             }
 
-            // Guard 2: suppress URLs triggered by our own cancel() / load()
             if (isHandling) {
                 LOG.fine("[BROWSER] Suppressing re-entrant location event: " + newUrl);
                 return;
             }
 
-            // Guard 3: same URL blocked less than COOLDOWN_MS ago → skip
             Long lastBlocked = lastBlockedAt.get(newUrl);
             if (lastBlocked != null && (System.currentTimeMillis() - lastBlocked) < COOLDOWN_MS) {
                 LOG.fine("[BROWSER] Cooldown active for: " + newUrl);
                 return;
             }
 
-            // ── Break time: skip all blocking ─────────────────────────────
-            if (isBreakTime()) {
-                LOG.info("[BROWSER] Break time — allowing (location): " + newUrl);
+            // CHANGE 1/6: check isBlockingDisabled() — covers BREAK + BUFFER
+            if (isBlockingDisabled()) {
+                LOG.info("[BROWSER] Blocking disabled (mode=" +
+                        (focusStateHolder != null ? focusStateHolder.getMode() : "unknown")
+                        + ") — allowing: " + newUrl);
+                // CHANGE 2: record allowed URL in history
+                pushHistory(engine, oldUrl);
                 onResult.accept(newUrl,
-                        RelevanceResult.allowed(1.0, "Break time — all sites allowed."));
+                        RelevanceResult.allowed(1.0, "Blocking disabled — all sites allowed."));
                 return;
             }
 
             LOG.info("[BROWSER] Location changed → " + newUrl);
 
-            // Cache hit (previous decision for this URL)
             if (cache.containsKey(newUrl)) {
                 RelevanceResult cached = cache.get(newUrl);
                 LOG.info("[BROWSER] Cache hit for " + newUrl + " → " + cached.getVerdict());
                 if (cached.isBlocked()) {
+                    // CHANGE 2/3: do NOT push blocked URL to history
                     dispatchBlock(engine, newUrl, cached, onResult);
+                } else {
+                    pushHistory(engine, oldUrl);
                 }
                 return;
             }
 
-            // Quick structural decision — no DOM needed
             BlockingService.Decision quick = blockingService.quickDecision(newUrl);
             LOG.info("[BROWSER] quickDecision(" + newUrl + ") = " + quick);
 
             if (quick == BlockingService.Decision.ALLOW) {
                 RelevanceResult r = RelevanceResult.allowed(1.0, "Allowed by platform rule.");
                 cache.put(newUrl, r);
+                // CHANGE 2/3: record previous URL before navigating
+                pushHistory(engine, oldUrl);
                 onResult.accept(newUrl, r);
                 sessionTrackingService.logPlatformDecision(newUrl, "ALLOW", "platform rule");
 
@@ -163,45 +206,41 @@ public class BrowserController {
                 RelevanceResult r = RelevanceResult.blocked(0.0, "Blocked by platform rule.");
                 cache.put(newUrl, r);
                 lastBlockedAt.put(newUrl, System.currentTimeMillis());
+                // CHANGE 2/3: do NOT push blocked URL — history stays at previous page
                 dispatchBlock(engine, newUrl, r, onResult);
                 sessionTrackingService.logPlatformDecision(newUrl, "BLOCK", "platform rule");
             }
-            // CHECK_RELEVANCE → wait for SUCCEEDED (phase 2)
+            // CHECK_RELEVANCE → wait for SUCCEEDED
         };
         engine.locationProperty().addListener(locationListener);
 
         // ══════════════════════════════════════════════════════════════════
-        // PHASE 2 — stateProperty SUCCEEDED listener
-        //   Fires once the DOM is fully loaded and JS is executable.
-        //   Only runs the full relevance chain for CHECK_RELEVANCE URLs.
+        // PHASE 2 — stateProperty SUCCEEDED (full DOM-based evaluation)
         // ══════════════════════════════════════════════════════════════════
         stateListener = (obs, oldState, newState) -> {
             if (newState != Worker.State.SUCCEEDED) return;
 
             String url = engine.getLocation();
 
-            // Guard: ignore blank / about:blank
             if (url == null || url.isBlank()
                     || url.equals("about:blank")
                     || !url.startsWith("http")) {
                 return;
             }
 
-            // ── Break time: skip all blocking ─────────────────────────────
-            if (isBreakTime()) {
-                LOG.fine("[BROWSER] Break time — skipping relevance for: " + url);
+            // CHANGE 1/6: same check for SUCCEEDED phase
+            if (isBlockingDisabled()) {
+                LOG.fine("[BROWSER] Blocking disabled — skipping relevance for: " + url);
                 onResult.accept(url,
-                        RelevanceResult.allowed(1.0, "Break time — all sites allowed."));
+                        RelevanceResult.allowed(1.0, "Blocking disabled — all sites allowed."));
                 return;
             }
 
-            // Already decided in phase 1 or cached
             if (cache.containsKey(url)) {
                 LOG.fine("[BROWSER] SUCCEEDED but result already cached for: " + url);
                 return;
             }
 
-            // Only run the chain for URLs that need content evaluation
             BlockingService.Decision quick = blockingService.quickDecision(url);
             if (quick != BlockingService.Decision.CHECK_RELEVANCE) {
                 LOG.fine("[BROWSER] SUCCEEDED: quick=" + quick + " (no chain needed) for " + url);
@@ -210,12 +249,10 @@ public class BrowserController {
 
             LOG.info("[BROWSER] SUCCEEDED — running relevance chain for: " + url);
 
-            // Extract page content from the loaded DOM
             ContentData data = extractor.extract(engine, url);
             int contentLen = (data.toCombinedText() != null) ? data.toCombinedText().length() : 0;
             LOG.info("[BROWSER] Extracted content length: " + contentLen + " chars for " + url);
 
-            // Run the full Chain-of-Responsibility
             RelevanceResult result = relevanceController.evaluate(topic, data);
             LOG.info(String.format("[BROWSER] Relevance result for %s → verdict=%s score=%.3f reason='%s'",
                     url, result.getVerdict(), result.getScore(), result.getReason()));
@@ -225,6 +262,7 @@ public class BrowserController {
 
             if (result.isBlocked()) {
                 lastBlockedAt.put(url, System.currentTimeMillis());
+                // CHANGE 2/3: blocked pages not pushed to history
                 dispatchBlock(engine, url, result, onResult);
             } else {
                 onResult.accept(url, result);

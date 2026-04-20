@@ -12,37 +12,17 @@ import javafx.scene.layout.*;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-
 /**
  * VIEW — AI-Relevance Browser with multi-tab support.
  *
- * MERGE CHANGES (search-later-final → demo)
- * ──────────────────────────────────────────
- * The only method meaningfully changed is handleRelevanceResult().
- * Everything else is IDENTICAL to the demo branch original.
- *
- * What changed:
- *   1. BlockPageView now receives an "Other Options" callback in addition
- *      to "Go Back". This uses BlockPageView's existing 3-callback overload
- *      (onGoBack, onSearchInstead=null, onBypass=null) — no BlockPageView
- *      changes required.
- *   2. When "Other Options" is clicked, the tab content is replaced with
- *      a new OptionsView (new file, no existing code modified).
- *   3. OptionsView wires "Save for Later" → LocalSavedLinksStore (reused
- *      as-is from search-later-final), and "2 Min Buffer" → a volatile
- *      boolean flag that BrowserController reads via isBreakTime().
- *   4. A Runnable sessionEndExtras hook lets BrowserLauncher attach a
- *      session-summary display without modifying any service.
- *
- * UNCHANGED:
- *   - All tab management, nav bar, goBack(), loadUrl() — identical to demo.
- *   - BrowserController.attach() call — identical.
- *   - No services touched.
- *
- * SRP  : Owns browser UI layout, tab management, and navigation bar.
- * DIP  : Accepts BrowserController; never calls services directly.
+ * CHANGES (vs original):
+ *  1. goBack() now delegates to BrowserController.popHistory() instead of
+ *     a local Deque. This ensures blocked pages are never in the history
+ *     stack and Go Back always works (fixes Change 2 + 3).
+ *  2. TabState no longer holds its own history Deque — BrowserController
+ *     owns it (single source of truth, GRASP Information Expert).
+ *  3. First page load (google.com) is recorded by BrowserController
+ *     automatically via pushHistory() on each allowed navigation.
  */
 public class AiBrowserView {
 
@@ -50,7 +30,7 @@ public class AiBrowserView {
     private static class TabState {
         final WebView       webView     = new WebView();
         final WebEngine     webEngine   = webView.getEngine();
-        final Deque<String> history     = new ArrayDeque<>();
+        // CHANGE 2: removed local history Deque — BrowserController owns it now
         String              currentUrl  = null;
         AnchorPane          contentPane = new AnchorPane();
 
@@ -70,10 +50,6 @@ public class AiBrowserView {
     private String            topic;
     private TimerOverlay      timerOverlay;
 
-    // ── MERGE ADDITION: 2-minute buffer flag ──────────────────────────────────
-    // When true, the BrowserController treats every page as allowed (break mode).
-    // We reuse the existing FocusStateHolder pattern already in BrowserController;
-    // the flag here is purely for AiBrowserView's own display logic.
     private volatile boolean bufferActive = false;
 
     public AiBrowserView() {
@@ -109,7 +85,7 @@ public class AiBrowserView {
         return root;
     }
 
-    // ── Tab area (UNCHANGED from demo) ────────────────────────────────────────
+    // ── Tab area ──────────────────────────────────────────────────────────────
 
     private BorderPane buildTabArea(TimerOverlay overlay) {
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.ALL_TABS);
@@ -148,7 +124,7 @@ public class AiBrowserView {
         return wrapper;
     }
 
-    // ── Add tab (UNCHANGED from demo) ─────────────────────────────────────────
+    // ── Add tab ───────────────────────────────────────────────────────────────
 
     private void addNewTab(String title) {
         TabState state = new TabState();
@@ -179,22 +155,43 @@ public class AiBrowserView {
         tabPane.getSelectionModel().select(tab);
     }
 
-    // ── Navigation (UNCHANGED from demo) ─────────────────────────────────────
+    // ── Navigation ────────────────────────────────────────────────────────────
 
     public void loadUrl(String url) {
         TabState state = activeState();
         if (state == null) return;
-        if (state.currentUrl != null) state.history.push(state.currentUrl);
+        // CHANGE 3: track current URL before navigating (first-load fix)
         state.currentUrl = url;
         String full = url.startsWith("http") ? url : "https://" + url;
         state.webEngine.load(full);
     }
 
+    /**
+     * CHANGE 2/3: Go Back now uses BrowserController.popHistory() so it
+     * always returns to the last ALLOWED page, never a blocked one.
+     * Falls back to WebEngine history if BrowserController has nothing,
+     * which handles the very first navigation gracefully.
+     */
     public void goBack() {
         TabState state = activeState();
-        if (state == null || state.history.isEmpty()) return;
-        state.currentUrl = state.history.pop();
-        state.webEngine.load(state.currentUrl);
+        if (state == null) return;
+
+        // Try BrowserController-managed history first (most reliable)
+        String prev = browserController.popHistory(state.webEngine);
+        if (prev != null && !prev.isBlank() && !prev.equals("about:blank")) {
+            state.currentUrl = prev;
+            String full = prev.startsWith("http") ? prev : "https://" + prev;
+            state.webEngine.load(full);
+            return;
+        }
+
+        // Fallback: try JavaFX WebHistory
+        javafx.scene.web.WebHistory history = state.webEngine.getHistory();
+        int currentIndex = history.getCurrentIndex();
+        if (currentIndex > 0) {
+            history.go(-1);
+        }
+        // If neither works — silently do nothing (no crash)
     }
 
     private TabState activeState() {
@@ -204,58 +201,38 @@ public class AiBrowserView {
     }
 
     // ── Relevance result handler ──────────────────────────────────────────────
-    // MERGE CHANGE: adds "Other Options" button wiring.
-    // The original "Go Back" path is fully preserved.
-    // BlockPageView's existing 3-callback overload is used with
-    //   onSearchInstead = null (hidden), onBypass = null (hidden)
-    // — we show our own buttons via the new "Other Options" callback.
 
     private void handleRelevanceResult(String url, RelevanceResult result,
                                        TabState state, Tab tab) {
         if (result.isBlocked() || result.isBorderline()) {
 
-            // ── Go Back callback (UNCHANGED from demo) ────────────────────
             Runnable onGoBack = () -> {
                 browserController.evict(url);
                 tab.setContent(state.contentPane);
                 goBack();
             };
 
-            // ── MERGE ADDITION: Other Options callback ────────────────────
-            // Replaces the tab content with OptionsView (new file).
-            // Does not modify BlockPageView or BrowserController.
             Runnable onOtherOptions = () ->
                     tab.setContent(buildOptionsView(url, result, state, tab, onGoBack));
 
-            // Build block page using BlockPageView's existing API.
-            // We pass onSearchInstead=null and onBypass=null because
-            // we route those actions through OptionsView instead.
             BlockPageView blockPageView = new BlockPageView();
             BorderPane blockPage = blockPageView.getView(
                     result,
                     url,
-                    onGoBack,          // ← unchanged
-                    onOtherOptions,    // ← MERGE ADDITION: "Other Options" button
-                    null               // bypass handled inside OptionsView
+                    onGoBack,
+                    onOtherOptions,
+                    null
             );
             tab.setContent(blockPage);
 
         } else {
-            // Allowed — show the normal web content (UNCHANGED from demo)
+            // Allowed — restore web content
             tab.setContent(state.contentPane);
         }
     }
 
     /**
-     * MERGE ADDITION — builds the OptionsView panel for the "Other Options" flow.
-     *
-     * Called only when the user explicitly clicks "Other Options" on the block page.
-     * Wires:
-     *   • Save for Later → LocalSavedLinksStore (search-later-final, unchanged)
-     *   • 2 Min Buffer   → clears BrowserController cache so blocked pages are
-     *                      re-evaluated without the cached BLOCK verdict, giving
-     *                      the user 2 minutes of unblocked browsing.
-     *   • Go Back        → same onGoBack Runnable as the block page
+     * Builds the OptionsView for "Other Options" flow.
      */
     private BorderPane buildOptionsView(String blockedUrl,
                                         RelevanceResult result,
@@ -264,30 +241,21 @@ public class AiBrowserView {
                                         Runnable onGoBack) {
         OptionsView optionsView = new OptionsView();
 
-        // Buffer START: clear cache so the next loads are re-evaluated freely.
-        // We do NOT flip FocusStateHolder — that would disable ALL blocking.
-        // Instead we just evict cached verdicts; the user navigates to new pages
-        // which get fresh evaluations, and BrowserController's re-entrant guards
-        // naturally allow through during this window.
         Runnable onBufferStart = () -> {
             bufferActive = true;
-            browserController.clearCache(); // let pages through for 2 min
-            tab.setContent(state.contentPane); // restore the web view
-            goBack(); // navigate away from blocked page
+            browserController.clearCache();
+            tab.setContent(state.contentPane);
+            goBack();
         };
 
-        // Buffer END: re-enable strict blocking by marking buffer inactive.
-        // The cache is already clear; new page loads will run through the full chain.
         Runnable onBufferEnd = () -> {
             bufferActive = false;
-            // No further action needed — BrowserController naturally resumes
-            // blocking because it re-evaluates every uncached URL.
         };
 
         return optionsView.getView(result, blockedUrl, onGoBack, onBufferStart, onBufferEnd);
     }
 
-    // ── Nav bar (UNCHANGED from demo) ────────────────────────────────────────
+    // ── Nav bar ────────────────────────────────────────────────────────────────
 
     private HBox buildNavBar() {
         Button backBtn = navButton("←");
