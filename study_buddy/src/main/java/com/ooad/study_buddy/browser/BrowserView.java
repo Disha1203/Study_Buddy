@@ -5,11 +5,12 @@ import javafx.geometry.Insets;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.StackPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Button;
 import javafx.scene.web.WebView;
 import javafx.scene.web.WebEngine;
+
+import java.util.function.Consumer;
 
 /**
  * SRP: Only responsible for the browser UI.
@@ -21,8 +22,10 @@ public class BrowserView {
     private WebEngine webEngine;
     private TextField urlField;
     private Button goButton;
+    private final Consumer<String> onDistraction;
 
-    public BrowserView() {
+    public BrowserView(Consumer<String> onDistraction) {
+        this.onDistraction = onDistraction;
 
         webView = new WebView();
         webEngine = webView.getEngine();
@@ -53,22 +56,52 @@ public class BrowserView {
         goButton.setOnAction(e -> loadPage());
         urlField.setOnAction(e -> loadPage());
 
-        // URL tracking (REQUIRED FEATURE)
+        // When navigation happens, check for distracting sites
         webEngine.locationProperty().addListener((obs, oldVal, newVal) -> {
-            System.out.println("Navigated to: " + newVal);
+            if (newVal != null && !newVal.isBlank()) {
+                System.out.println("Navigated to: " + newVal);
+                checkDistraction(newVal);
+            }
         });
     }
 
     private void loadPage() {
         String url = urlField.getText().trim();
-        if (!url.startsWith("http")) {
-            url = "https://" + url;
+        if (!url.isBlank()) {
+            if (!url.startsWith("http")) {
+                url = "https://" + url;
+            }
+            webEngine.load(url);
         }
-        webEngine.load(url);
+    }
+
+    /** Clears the browser back to a neutral page */
+    public void reset() {
+        urlField.setText("");
+        webEngine.load("about:blank");
     }
 
     /**
-     * Returns the browser layout with an optional floating timer overlay
+     * Placeholder distraction check.
+     * Replace the keywords list with your actual logic if needed.
+     */
+    private void checkDistraction(String url) {
+        String[] distractingSites = {
+                "youtube.com", "instagram.com", "twitter.com",
+                "facebook.com", "reddit.com", "netflix.com"
+        };
+        for (String site : distractingSites) {
+            if (url.contains(site)) {
+                if (onDistraction != null) {
+                    onDistraction.accept(url);
+                }
+                return;
+            }
+        }
+    }
+
+    /**
+     * Returns the browser layout with the timer overlay
      * pinned to the bottom-right corner using AnchorPane.
      */
     public BorderPane getView(TimerOverlay overlay) {
@@ -81,8 +114,6 @@ public class BrowserView {
         layout.setTop(topBar);
 
         if (overlay != null) {
-            // AnchorPane lets us pin the overlay to exact corner coordinates
-            // WebView fills the entire pane; overlay sits on top, fixed size
             AnchorPane contentPane = new AnchorPane();
 
             webView.prefWidthProperty().bind(contentPane.widthProperty());
@@ -92,7 +123,6 @@ public class BrowserView {
             overlay.setMaxHeight(Double.MAX_VALUE);
             overlay.setPrefWidth(160);
 
-            // Pin overlay to bottom-right with 16px margin
             AnchorPane.setBottomAnchor(overlay, 16.0);
             AnchorPane.setRightAnchor(overlay, 16.0);
 
@@ -105,7 +135,7 @@ public class BrowserView {
         return layout;
     }
 
-    /** Backward-compatible plain browser without overlay. */
+    /** Plain browser without overlay. */
     public BorderPane getView() {
         return getView(null);
     }
