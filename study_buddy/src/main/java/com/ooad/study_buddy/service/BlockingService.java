@@ -5,6 +5,7 @@ import com.ooad.study_buddy.repository.SiteMetadataRepository;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.sql.*;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -13,15 +14,21 @@ import java.util.logging.Logger;
 /**
  * SERVICE — Blocking rules & platform-specific logic
  *
- * CHANGE: YouTube homepage ("/") now returns ALLOW instead of CHECK_RELEVANCE.
- *         Users need to navigate from the YouTube homepage; blocking it
- *         immediately is confusing. Only individual videos (/watch), search
- *         results (/results), and Shorts (/shorts) are evaluated or blocked.
+ * ADDED: MySQL persistence for whitelist/blacklist add & remove operations.
+ * When a domain is added or removed via whitelist()/blacklist()/removeDomain(),
+ * the change is written to both the in-memory repository AND the MySQL database
+ * so it survives application restarts.
  */
 @Service
 public class BlockingService {
 
     private static final Logger LOG = Logger.getLogger(BlockingService.class.getName());
+
+    // ── MySQL connection settings (mirrors DatabaseSeedService) ───────────────
+    private static final String DB_URL  =
+            "jdbc:mysql://localhost:3306/studybuddy?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";
+    private static final String DB_USER = "root";
+    private static final String DB_PASS = "123";
 
     private final SiteMetadataRepository ruleRepo;
 
@@ -35,13 +42,6 @@ public class BlockingService {
 
     /**
      * Fast structural decision — called before any content extraction.
-     *
-     * Priority order:
-     *   1. Whitelist  → ALLOW  (absolute override)
-     *   2. Blacklist  → BLOCK  (absolute override)
-     *   3. Known distraction domains → BLOCK
-     *   4. Platform path rules (YouTube, Reddit)
-     *   5. Everything else → CHECK_RELEVANCE
      */
     public Decision quickDecision(String rawUrl) {
         if (rawUrl == null || rawUrl.isBlank()) return Decision.ALLOW;
@@ -49,25 +49,18 @@ public class BlockingService {
         String domain = extractDomain(rawUrl);
         String path   = extractPath(rawUrl);
 
-        // 1. Whitelist — absolute ALLOW (even known distractions can be whitelisted)
         if (isWhitelisted(domain)) {
             LOG.fine("[BLOCKING] ALLOW (whitelist): " + rawUrl);
             return Decision.ALLOW;
         }
-
-        // 2. Explicit blacklist — absolute BLOCK
         if (isBlacklisted(domain)) {
             LOG.info("[BLOCKING] BLOCK (blacklist): " + rawUrl);
             return Decision.BLOCK;
         }
-
-        // 3. Known distraction social / streaming / entertainment domains
         if (isKnownDistraction(domain)) {
             LOG.info("[BLOCKING] BLOCK (known distraction): " + rawUrl);
             return Decision.BLOCK;
         }
-
-        // 4. Platform-specific path rules
         if (isYoutube(domain)) {
             Decision d = youtubeDecision(path);
             LOG.info("[BLOCKING] YouTube path=" + path + " → " + d);
@@ -83,19 +76,33 @@ public class BlockingService {
         return Decision.CHECK_RELEVANCE;
     }
 
-    // ── Whitelist / Blacklist management ─────────────────────────────────────
+    // ── Whitelist / Blacklist management (in-memory + MySQL) ──────────────────
 
+    /**
+     * Adds a domain to the whitelist in both in-memory repo and MySQL.
+     */
     public void whitelist(String domain, String notes) {
-        upsert(normalizeDomain(domain), SiteMetadata.RuleType.WHITELIST, notes);
+        String normalized = normalizeDomain(domain);
+        upsert(normalized, SiteMetadata.RuleType.WHITELIST, notes);
+        persistToMySQL(normalized, "WHITELIST", notes);
     }
 
+    /**
+     * Adds a domain to the blacklist in both in-memory repo and MySQL.
+     */
     public void blacklist(String domain, String notes) {
-        upsert(normalizeDomain(domain), SiteMetadata.RuleType.BLACKLIST, notes);
+        String normalized = normalizeDomain(domain);
+        upsert(normalized, SiteMetadata.RuleType.BLACKLIST, notes);
+        persistToMySQL(normalized, "BLACKLIST", notes);
     }
 
+    /**
+     * Removes a domain from both the in-memory repo and MySQL.
+     */
     public void removeDomain(String domain) {
         String normalized = normalizeDomain(domain);
         ruleRepo.findByDomain(normalized).ifPresent(ruleRepo::delete);
+        deleteFromMySQL(normalized);
     }
 
     public boolean isWhitelisted(String domain) {
@@ -124,50 +131,55 @@ public class BlockingService {
                 .toList();
     }
 
-    // ── Platform rules ────────────────────────────────────────────────────────
+    // ── MySQL persistence helpers ─────────────────────────────────────────────
 
     /**
-     * YouTube path rules:
-     *   /           → ALLOW   (homepage — user needs a starting point)
-     *   /shorts/*   → BLOCK   (Shorts: always distraction)
-     *   /watch      → CHECK_RELEVANCE (video evaluated against topic)
-     *   /results    → CHECK_RELEVANCE (search results)
-     *   anything else → CHECK_RELEVANCE
-     *
-     * FIX: "/" was previously CHECK_RELEVANCE which caused the YouTube
-     * homepage to be blocked on first visit (empty-page content scores 0).
+     * Inserts or updates the rule in MySQL using INSERT ... ON DUPLICATE KEY UPDATE.
      */
-    private Decision youtubeDecision(String path) {
-        if (path == null || path.isBlank()) return Decision.ALLOW;
-
-        // Normalize: remove trailing slash unless it IS the root
-        String p = (path.length() > 1 && path.endsWith("/"))
-                ? path.substring(0, path.length() - 1) : path;
-
-        // Homepage — always allow (let user navigate to a video first)
-        if (p.equals("/") || p.isBlank()) return Decision.ALLOW;
-
-        // Shorts — always block, no content check needed
-        if (p.startsWith("/shorts")) return Decision.BLOCK;
-
-        if (p.startsWith("/watch"))   return Decision.CHECK_RELEVANCE;
-        if (p.startsWith("/results")) return Decision.CHECK_RELEVANCE;
-
-        // Channel pages, playlists, etc. — check relevance
-        return Decision.CHECK_RELEVANCE;
+    private void persistToMySQL(String domain, String ruleType, String notes) {
+        String sql = "INSERT INTO blocking_rules (domain, rule_type, notes) VALUES (?, ?, ?) " +
+                     "ON DUPLICATE KEY UPDATE rule_type = VALUES(rule_type), notes = VALUES(notes)";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASS);
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, domain);
+            ps.setString(2, ruleType);
+            ps.setString(3, notes != null ? notes : "");
+            ps.executeUpdate();
+            LOG.info("[DB] Persisted " + ruleType + " rule for: " + domain);
+        } catch (SQLException e) {
+            LOG.warning("[DB] Failed to persist rule for " + domain + ": " + e.getMessage());
+        }
     }
 
     /**
-     * Reddit path rules:
-     *   /                          → BLOCK (infinite scroll / front page)
-     *   /r/sub/comments/id/slug    → CHECK_RELEVANCE (actual post)
-     *   /r/subreddit               → CHECK_RELEVANCE (may be on-topic)
-     *   /search                    → CHECK_RELEVANCE
-     *   anything else              → BLOCK
+     * Deletes the rule from MySQL.
      */
+    private void deleteFromMySQL(String domain) {
+        String sql = "DELETE FROM blocking_rules WHERE domain = ?";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASS);
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, domain);
+            int rows = ps.executeUpdate();
+            LOG.info("[DB] Deleted rule for: " + domain + " (" + rows + " rows affected)");
+        } catch (SQLException e) {
+            LOG.warning("[DB] Failed to delete rule for " + domain + ": " + e.getMessage());
+        }
+    }
+
+    // ── Platform rules ────────────────────────────────────────────────────────
+
+    private Decision youtubeDecision(String path) {
+        if (path == null || path.isBlank()) return Decision.CHECK_RELEVANCE;
+        String p = (path.length() > 1 && path.endsWith("/"))
+                ? path.substring(0, path.length() - 1) : path;
+        if (p.startsWith("/shorts")) return Decision.BLOCK;
+        if (p.startsWith("/watch"))   return Decision.CHECK_RELEVANCE;
+        if (p.startsWith("/results")) return Decision.CHECK_RELEVANCE;
+        return Decision.CHECK_RELEVANCE;
+    }
+
     private Decision redditDecision(String path) {
         if (path == null || path.isBlank() || path.equals("/")) return Decision.BLOCK;
-
         if (path.startsWith("/r/") && path.contains("/comments/")) return Decision.CHECK_RELEVANCE;
         if (path.startsWith("/search"))  return Decision.CHECK_RELEVANCE;
         if (path.startsWith("/r/"))      return Decision.CHECK_RELEVANCE;

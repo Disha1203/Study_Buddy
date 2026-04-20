@@ -17,11 +17,12 @@ import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
-import com.ooad.study_buddy.focus.FocusStateHolder;
 
 /**
  * GRASP Controller: Owns the Stage and orchestrates scene transitions.
- * Uses MySQL via DatabaseSeedService to load whitelist/blacklist on startup.
+ *
+ * UPDATED: passes blockingService to HomepageView so the rules manager
+ * panel is wired and persists changes to MySQL.
  */
 public class BrowserLauncher extends Application {
 
@@ -52,18 +53,18 @@ public class BrowserLauncher extends Application {
         // 1. In-memory repo
         InMemorySiteMetadataRepository inMemoryRepo =
                 new InMemorySiteMetadataRepository();
-    
+
         // 2. Load whitelist/blacklist from MySQL into in-memory repo
         DatabaseSeedService seeder = new DatabaseSeedService(inMemoryRepo);
         seeder.loadFromDatabase();
-    
+
         // 3. Wire services
         blockingService     = new BlockingService(inMemoryRepo);
         relevanceService    = new RelevanceService();
         extractor           = new ContentExtractionService();
         chainFactory        = new RelevanceChainFactory(blockingService, relevanceService);
         relevanceController = new RelevanceController(chainFactory, blockingService);
-        browserController   = new BrowserController(extractor, relevanceController, blockingService); // ← 3 args
+        browserController   = new BrowserController(extractor, relevanceController, blockingService);
     }
 
     // ── Homepage ──────────────────────────────────────────────────────────────
@@ -71,8 +72,14 @@ public class BrowserLauncher extends Application {
     private void showHomepage() {
         sessionController.stopSession();
 
-        HomepageView homepage = new HomepageView(sessionController, this::launchSession);
-        Scene scene = new Scene(homepage.getView(), 1000, 600);
+        // Pass blockingService so the rules panel is wired
+        HomepageView homepage = new HomepageView(
+                sessionController,
+                this::launchSession,
+                validationService,
+                blockingService);   // ← NEW
+
+        Scene scene = new Scene(homepage.getView(), 1200, 680);
         scene.setFill(Color.web("#0f0f0f"));
         primaryStage.setScene(scene);
         primaryStage.setTitle("Study Buddy");
@@ -81,28 +88,23 @@ public class BrowserLauncher extends Application {
     // ── Session launch ────────────────────────────────────────────────────────
 
     private void launchSession(FocusSession session) {
-        FocusStateHolder focusStateHolder = new FocusStateHolder();
-
         TimerOverlay overlay = new TimerOverlay(
                 session.getTopic(),
                 session.getTotalDurationMinutes());
-
-        overlay.setFocusStateHolder(focusStateHolder);
-        overlay.setBrowserController(browserController);
         overlay.setOnSessionEndCallback(() -> Platform.runLater(this::showHomepage));
-
-        browserController.setFocusStateHolder(focusStateHolder);
-        browserController.clearCache();
 
         sessionController.startSession(session, overlay);
 
         AiBrowserView browser = new AiBrowserView();
         javafx.scene.layout.BorderPane view = browser.getView(
-                overlay, browserController, session.getTopic());
+                overlay,
+                browserController,
+                session.getTopic());
 
-        Scene scene = new Scene(view, 1000, 600);
+        Scene scene = new Scene(view, 1200, 680);
         primaryStage.setScene(scene);
         primaryStage.setTitle("Study Buddy — " + session.getTopic());
+
         browser.loadUrl("https://www.google.com");
     }
 
