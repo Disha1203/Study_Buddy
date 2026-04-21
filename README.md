@@ -261,22 +261,20 @@ Social media, streaming, and gaming platforms are blacklisted by default.
 
 ## 🖼️ Screenshots
 
-> _Screenshots below — replace paths with actual images_
-
 **Homepage / Session Setup**
-![Homepage](<img width="1196" height="679" alt="image" src="https://github.com/user-attachments/assets/45babcea-4c29-4e95-aebe-7652e3f0f3a8" />)
+![Homepage](images/Homepage_FocusControls.png)
 
 **Active Browser with Timer Overlay**
-![Browser](docs/screenshots/browser.png)
+![Browser](images/Browser.png)
 
 **Block Page**
-![Block Page](docs/screenshots/block_page.png)
+![Block Page](images/Screenshot 2026-04-21 at 11.04.59 AM.png)
 
 **Options Screen (Save for Later / 2 Min Buffer)**
-![Options](docs/screenshots/options.png)
+![Options](images/OtherOptions.png)
 
 **Session Summary**
-![Summary](docs/screenshots/summary.png)
+![Summary](images/SessionSummary.png)
 
 ---
 
