@@ -183,7 +183,7 @@ public class BlockPageView {
         actionRow.getChildren().add(backBtn);
 
         if (onSearchInstead != null) {
-            Button searchBtn = secondaryButton("🔍 Search Instead");
+            Button searchBtn = secondaryButton("Other options");
             searchBtn.setOnAction(e -> onSearchInstead.run());
             actionRow.getChildren().add(searchBtn);
         }
