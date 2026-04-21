@@ -268,7 +268,7 @@ Social media, streaming, and gaming platforms are blacklisted by default.
 ![Browser](images/Browser.png)
 
 **Block Page**
-![Block Page](images/Screenshot 2026-04-21 at 11.04.59 AM.png)
+![Block Page](images/Block1.png)
 
 **Options Screen (Save for Later / 2 Min Buffer)**
 ![Options](images/OtherOptions.png)
