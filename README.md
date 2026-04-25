@@ -4,7 +4,7 @@
 
 ---
 
-## 🧠 What Is Study Buddy?
+## What Is Study Buddy?
 
 Study Buddy is a JavaFX desktop application that intercepts every web page you visit during a study session and decides — in real time — whether it's relevant to what you're supposed to be learning.
 
@@ -14,11 +14,10 @@ Built as part of an Object-Oriented Analysis & Design course, the project demons
 
 ---
 
-## ✨ Features
+## Features
 
 - 🔒 **AI-Powered Page Blocking** — semantic similarity scoring via sentence-transformers (`mxbai-embed-large-v1`) blocks irrelevant content automatically
 - ⏱️ **Pomodoro Timer** — Standard (25/5), Extended (50/10), and a Dev (15/15) mode; floating overlay stays visible while browsing
-- 🔗 **Chain of Responsibility** — modular pipeline: Whitelist → Blacklist → URL Check → Content Check
 - 📋 **Whitelist & Blacklist Manager** — add/remove domains via UI; changes persist to MySQL instantly
 - 💾 **Save for Later** — blocked pages can be bookmarked and reviewed in the post-session summary
 - ⏳ **2-Minute Buffer** — temporarily unlocks browsing when you genuinely need to visit a blocked page
@@ -29,7 +28,7 @@ Built as part of an Object-Oriented Analysis & Design course, the project demons
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -113,7 +112,7 @@ study_buddy/
 
 ---
 
-## ⚙️ Prerequisites
+## Prerequisites
 
 | Requirement | Version |
 |---|---|
@@ -125,7 +124,7 @@ study_buddy/
 
 ---
 
-## 🗄️ Database Setup
+##  Database Setup
 
 1. Create the database:
 
@@ -145,7 +144,7 @@ spring.datasource.password=//yourpassword
 
 ---
 
-## 🐍 Python Service Setup
+## Python Service Setup
 
 The semantic relevance scoring runs as a local FastAPI server.
 
@@ -164,11 +163,11 @@ curl http://localhost:8001/health
 # {"status":"ok","model":"mixedbread-ai/mxbai-embed-large-v1","version":"1.5.0"}
 ```
 
-> ⚠️ The Java app **must** be able to reach `http://localhost:8001`. If the Python service is down, blocked pages default to BLOCKED (fail-safe behaviour).
+> The Java app **must** be able to reach `http://localhost:8001`. If the Python service is down, blocked pages default to BLOCKED (fail-safe behaviour).
 
 ---
 
-## ▶️ Running the Application
+## Running the Application
 
 Start both services in separate terminals:
 
@@ -191,75 +190,7 @@ Or alternatively using Spring Boot:
 
 ---
 
-## 🧭 Usage
-
-### 1. Set Up Your Session
-On the homepage, enter:
-- **Session Topic** — be specific (e.g., *"Dijkstra's Shortest Path Algorithm"*, not *"coding"*)
-- **Duration** — total session length in minutes (e.g., `60`)
-- **Pomodoro Mode** — Standard (25/5), Extended (50/10), or DEV (15/15 for testing)
-
-Optionally click **⚙ Focus Controls** to pre-configure your whitelist and blacklist.
-
-### 2. Browse During Focus
-The browser works like a normal browser. Every page you load is evaluated:
-
-| Decision | Meaning |
-|---|---|
-| ✅ **ALLOWED** | Relevance score ≥ 65% — page loads normally |
-| 🚫 **BLOCKED** | Score < 65% or known distraction — block page shown |
-| ⚡ **Instant ALLOW** | Domain is whitelisted (e.g., `stackoverflow.com`) |
-| ⛔ **Instant BLOCK** | Domain is blacklisted (e.g., `instagram.com`) |
-
-### 3. When Blocked
-The block page shows:
-- A sarcastic message
-- The relevance score
-- Three options via **Other Options**:
-  - 📌 **Save for Later** — bookmark it for after the session
-  - ⏱️ **2 Min Buffer** — temporarily unlock browsing for 120 seconds
-  - ← **Go Back** — return to the previous page
-
-### 4. Break Time
-During Pomodoro breaks, blocking is automatically suspended. The floating timer overlay switches from `FOCUS` to `BREAK` and all pages are allowed through.
-
-### 5. Session End
-When the timer finishes, a summary screen displays all links you saved for later during the session. Click **Start New Session** to reset and go again.
-
----
-
-## 🔗 Pre-Seeded Rules
-
-The following domains are whitelisted by default (always allowed regardless of topic):
-
-| Domain | Category |
-|---|---|
-| `scholar.google.com` | Google Scholar |
-| `arxiv.org` | Academic preprints |
-| `stackoverflow.com` | Developer Q&A |
-| `docs.oracle.com` | Java docs |
-| `docs.spring.io` | Spring docs |
-| `developer.mozilla.org` | MDN Web Docs |
-| `khanacademy.org`, `coursera.org`, `udemy.com`, `edx.org` | Online courses |
-| `google.com`, `bing.com`, `duckduckgo.com` | Search engines |
-
-Social media, streaming, and gaming platforms are blacklisted by default.
-
----
-
-## 🧩 Design Patterns Used
-
-| Pattern | Where |
-|---|---|
-| **Strategy** | `PomodoroStrategy` — Standard, Extended, Dev modes are interchangeable |
-| **Observer** | `TimerObserver` / `PomodoroTimer` — UI overlay reacts to timer ticks and mode changes |
-| **Chain of Responsibility** | `RelevanceHandler` chain — Whitelist → Blacklist → URL → Content |
-| **MVC** | Separated View (`*View.java`), Controller (`*Controller.java`), Model (`model/`) |
-| **Factory (GRASP Creator)** | `RelevanceChainFactory` — assembles the handler chain |
-
----
-
-## 🖼️ Screenshots
+##  Screenshots
 
 **Homepage / Session Setup**
 ![Homepage](images/Homepage_FocusControls.png)
@@ -278,9 +209,8 @@ Social media, streaming, and gaming platforms are blacklisted by default.
 
 ---
 
-## 🔮 Future Improvements
+## Future Improvements
 
-- [ ] **Browser History Panel** — show all visited/blocked URLs per session
 - [ ] **Analytics Dashboard** — visualise focus time, block rate, and topic alignment over multiple sessions
 - [ ] **Custom Threshold Slider** — let users tune the relevance score cutoff (currently fixed at 65%)
 - [ ] **Cloud Sync** — sync whitelist/blacklist rules and saved links across devices
@@ -289,7 +219,7 @@ Social media, streaming, and gaming platforms are blacklisted by default.
 - [ ] **Better YouTube Handling** — use YouTube Data API for richer metadata extraction on video pages
 
 
-## 📄 License
+## License
 
 This project is licensed under the **MIT License**.
 
@@ -306,5 +236,5 @@ copies of the Software.
 ---
 
 <div align="center">
-  <sub>Built with ☕ Java, 🐍 Python, and a lot of blocked distractions.</sub>
+  <sub>Built with  Java,  Python, and a lot of blocked distractions.</sub>
 </div>
