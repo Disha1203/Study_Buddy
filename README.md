@@ -16,15 +16,13 @@ Built as part of an Object-Oriented Analysis & Design course, the project demons
 
 ## Features
 
-- 🔒 **AI-Powered Page Blocking** — semantic similarity scoring via sentence-transformers (`mxbai-embed-large-v1`) blocks irrelevant content automatically
-- ⏱️ **Pomodoro Timer** — Standard (25/5), Extended (50/10), and a Dev (15/15) mode; floating overlay stays visible while browsing
-- 📋 **Whitelist & Blacklist Manager** — add/remove domains via UI; changes persist to MySQL instantly
-- 💾 **Save for Later** — blocked pages can be bookmarked and reviewed in the post-session summary
-- ⏳ **2-Minute Buffer** — temporarily unlocks browsing when you genuinely need to visit a blocked page
-- 🗂️ **Multi-Tab Browser** — full tab management with per-tab history and WebEngine instances
-- 📊 **Session Tracking** — every navigation decision (URL, verdict, score, reason) is logged to MySQL
-- 🛑 **Break-Mode Awareness** — blocking is automatically suspended during Pomodoro break intervals
-- 🎭 **Sarcastic Block Page** — 60+ rotating roast messages shown when a page is blocked
+- **AI-Powered Page Blocking** — semantic similarity scoring via sentence-transformers (`mxbai-embed-large-v1`) blocks irrelevant content automatically
+- **Pomodoro Timer** — Standard (25/5), Extended (50/10), and a Dev (15/15) mode; floating overlay stays visible while browsing
+- **Whitelist & Blacklist Manager** — add/remove domains via UI; changes persist to MySQL instantly
+- **Save for Later** — blocked pages can be bookmarked and reviewed in the post-session summary
+- **2-Minute Buffer** — temporarily unlocks browsing when you genuinely need to visit a blocked page
+- **Multi-Tab Browser** — full tab management with per-tab history and WebEngine instances
+- **Session Tracking** — every navigation decision (URL, verdict, score, reason) is logged to MySQL
 
 ---
 
